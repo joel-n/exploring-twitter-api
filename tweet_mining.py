@@ -95,7 +95,6 @@ def read_file(file_name: str) -> list[dict]:
     # yield objs
 
 
-
 def create_scatter_plot(x, y, path: str, title='', xlab='', ylab='') -> None:
     """Plot data x and y in a scatter plot and save
     to the provided path.
@@ -111,7 +110,7 @@ def create_scatter_plot(x, y, path: str, title='', xlab='', ylab='') -> None:
     No return value.    
     """
     plt.figure(figsize=(8,8), clear=True)
-    plt.plot(x, y, 'o')
+    plt.plot(x, y, 'o', color='dodgerblue')
     plt.title(title)
     plt.xlabel(xlab)
     plt.ylabel(ylab)
@@ -119,7 +118,7 @@ def create_scatter_plot(x, y, path: str, title='', xlab='', ylab='') -> None:
     return
 
 
-def create_hist(x, bins, path: str, title='', xlab='', ylab='') -> None:
+def create_hist(x, bins, path: str, title='', xlab='', ylab='', log_=False) -> None:
     """Plot data x and y in a histogram and save
     to the provided path.
     
@@ -135,12 +134,39 @@ def create_hist(x, bins, path: str, title='', xlab='', ylab='') -> None:
     No return value.    
     """
     plt.figure(figsize=(8,8), clear=True)
-    plt.hist(x, bins)
+    plt.hist(x, bins, color='palegreen', log=log_)
     plt.title(title)
     plt.xlabel(xlab)
     plt.ylabel(ylab)
     plt.savefig(path)
     return
+
+
+def create_loglog_hist(x, n_bins, path: str, title='', xlab='', ylab='') -> None:
+    """Plot data x and y in a histogram in log-log scale
+    and save to the provided path.
+    
+    Args:
+        - x: data for x axis (list or array)
+        - n_bins: integer that specifies the number of bins
+        - path: path to save figure to
+        - title: figure title
+        - xlab: x-axis label
+        - ylab: y-axis label
+        
+    No return value.    
+    """
+    
+    bins_ = np.concatenate((np.zeros(1), np.logspace(0, np.log10(max(x) + 1), num=n_bins, endpoint=True, base=10.0, dtype=None, axis=0)))
+    plt.figure(figsize=(8,8), clear=True)
+    plt.hist(x, bins_, color='palegreen', log=True)
+    plt.title(title)
+    plt.xlabel(xlab)
+    plt.ylabel(ylab)
+    plt.xscale('log')
+    plt.savefig(path)
+    return
+
 
 def recent_search(query_: str, max_results_pp=100) -> list[dict]:
     """Query the Twitter API for data using
@@ -157,6 +183,33 @@ def recent_search(query_: str, max_results_pp=100) -> list[dict]:
     
     """
     search_results = client.search_recent(query=query_, max_results=max_results_pp)
+    tweets = []
+
+    for page in search_results:
+        result = expansions.flatten(page)
+        for tweet in result:
+            tweets.append(tweet)
+    return tweets
+
+
+def full_archive_search(query_: str, max_results_pp=500, tweet_fields_=None, user_fields_=None,
+                        media_fields_=None, poll_fields_=None, place_fields_=None) -> list[dict]:
+    """Query the Twitter API for data using
+    the search/all endpoint.
+    
+    Args:
+        - query_: query string, max 1024 characters
+        - max_results_pp: the maximum results to return per page,
+        note that all matching results will be returned
+        
+    Returns:
+        - tweets: list of tweets in the form of json objects
+    
+    """
+    search_results = client.search_all(query=query_, max_results=max_results_pp,
+                                       tweet_fields=tweet_fields_, user_fields=user_fields_,
+                                       media_fields=media_fields_, poll_fields=poll_fields_,
+                                       place_fields=place_fields_)
     tweets = []
 
     for page in search_results:
@@ -257,7 +310,7 @@ def retrieve_conversations_recent(sample_file: str) -> None:
     return
 
 
-def get_root_tweets(conv_ids: list[str]) -> list[dict]:
+def get_root_tweets(conv_ids: list[str], get_saved=False) -> list[dict]:
     """Returns a list of tuples with information on a
     list of tweets (tweetIDs). Use case is to retrieve
     the id of the root of a conversation in order to query
@@ -265,41 +318,59 @@ def get_root_tweets(conv_ids: list[str]) -> list[dict]:
     
     Args:
         - conv_ids: list of tweet or conversation IDs
+        - get_saved: boolean; function will return the
+        root tweets saved in 'root_tweets/' if True.
         
     Returns:
         - roots: list of tuples containing the author ID, engagement
         metrics, tweet text and time stamp of the original tweet.
-    
-    """
+        - retrieved_conv_ids: list of retrieved conversation IDs;
+        some might be missing due to tweets being inaccessible
+    """   
     roots = []
-    results = client.tweet_lookup(conv_ids)
-    for page in results:
-        res = expansions.flatten(page)
-        for orig_tweet in res:
-            cid = orig_tweet['conversation_id']
-            append_objs_to_file(f'root_tweets/{cid}_root.jsonl', [orig_tweet])
-            
-            roots.append({'id':         orig_tweet['author_id'],
-                          'n_retweets': orig_tweet['public_metrics']['retweet_count'],
-                          'text':       orig_tweet['text'],
-                          'created_at': orig_tweet['created_at']})
-    return roots
+    retrieved_conv_ids = []
+    
+    if get_saved:
+        for conv_id in conv_ids:
+            if os.path.isfile(f'root_tweets/{conv_id}_root.jsonl'):
+                retrieved_conv_ids.append(conv_id)
+                orig_tweet = read_file(f'root_tweets/{conv_id}_root.jsonl')[0]
+                roots.append({'id':         orig_tweet['author_id'],
+                              'n_retweets': orig_tweet['public_metrics']['retweet_count'],
+                              'text':       orig_tweet['text'],
+                              'created_at': orig_tweet['created_at']})
+    else:
+        results = client.tweet_lookup(conv_ids)
+        for page in results:
+            res = expansions.flatten(page)
+            for orig_tweet in res:
+                cid = orig_tweet['conversation_id']
+                retrieved_conv_ids.append(cid)
+                
+                append_objs_to_file(f'root_tweets/{cid}_root.jsonl', [orig_tweet])
+                roots.append({'id':         orig_tweet['author_id'],
+                              'n_retweets': orig_tweet['public_metrics']['retweet_count'],
+                              'text':       orig_tweet['text'],
+                              'created_at': orig_tweet['created_at']})
+    
+    return roots, retrieved_conv_ids
 
 
-def get_saved_conversation_ids(lower_bound: int, upper_bound: int) -> list:
+def get_saved_conversation_ids(lower_bound: int, upper_bound: int, folder='sampled_conversations') -> list:
     """Returns a list of conversation ids between a given
     lower and upper bound from the folder of saved conversations.
     
     Args:
         - lower_bound: integer lower limit of conversation IDs to include
         - upper_bound: integer upper limit of conversation IDs to include
+        - folder: folder to search for conversations in
     
     Returns:
         - conv_ids: a list of conversation IDs from the folder
     
     """
     
-    file_paths = os.listdir('sampled_conversations')
+    file_paths = os.listdir(folder)
     conv_ids = []
     
     for conv_file_name in file_paths:
@@ -336,6 +407,9 @@ def get_retweets_of(conv_ids: list[str]) -> None:
     t1 = pytime.time()
     
     for i, root in enumerate(roots):
+        if os.path.isfile(f'retweets/{conv_ids[i]}.jsonl'):
+            continue
+        
         retweets = []
         
         # Find retweeting authors
@@ -345,7 +419,7 @@ def get_retweets_of(conv_ids: list[str]) -> None:
             # Should only return 1 result in practice (if querying on text)
             root_author = root['id']
             text = root['text']
-            #retweets = recent_search(query_=f'retweets_of:{root['id']} from:{retweeter} "{text}"')
+            #retweets_result = recent_search(query_=f'retweets_of:{root['id']} from:{retweeter} "{text}"')
             retweets_result = recent_search(query_=f'retweets_of:{root_author} from:{retweeter}')
             
             for rt in retweets_result:
@@ -354,6 +428,9 @@ def get_retweets_of(conv_ids: list[str]) -> None:
                 # if so use rt['referenced_tweets'][0]
                 for t in rt['referenced_tweets']:
                     if t['id'] == conv_ids[i]:
+                        # TODO: consider adding the RT to a file in this loop;
+                        # when dealing with thousands of RTs we cannot abort the
+                        # function call without losing all the data!
                         retweets.append(rt)
                         break
                 # break if RT found to avoid duplicates?
@@ -368,10 +445,111 @@ def get_retweets_of(conv_ids: list[str]) -> None:
     
     return
 
-def retweets_metrics(conv_ids: list[str]) -> None:
+
+def not_space(s: str) -> bool:
+    """Returns false if s is empty or
+    consists of whitespace characters.
+    """
+    return not (s.isspace() or not s)
+
+
+def handle_quotes(s: str) -> str:
+    """Removes quotation marks from the string
+    where they would cause an error if passed
+    to the API. Used when fetching retweets
+    and querying on the tweet text. Seems to work
+    for right-to-left languages as well (e.g.,
+    Arabic and Hebrew.)
+    
+    Args:
+        - s: string that contains quotation
+        marks ("), and a hyperlink removed.
+        
+    Returns:
+        - a string with quotation marks in the
+        correct places: only between characters
+        in the string, and no quotation marks at
+        the end or beginning of the string.
+    
+    """
+    s_list = s.split('"')
+    return '" "'.join(filter(not_space, s_list))
+
+
+def get_all_retweets(conv_ids: list[str]) -> None:
+    """Get retweets of conversation roots and stores them in a .jsonl-file.
+    Will ignore the conversation IDs that already is associated with a 
+    retweet file. Efficient query for all RTs containing the text, and is
+    an RT of the root author. In practice, not all retweets can be fetched
+    due to some profiles being protected.
+        
+    Args:
+        - conv_ids: list of conversation IDs to fetch retweets for
+        
+    No return value.    
+    """
+
+    roots, retrieved_conv_ids = get_root_tweets(conv_ids, get_saved=True)
+    
+    n_roots = len(roots)
+    n_retweets = 0
+    for r in roots:
+        n_retweets += r['n_retweets']
+    
+    
+    print('{} of {} root tweets were available'.format(n_roots, len(conv_ids)))
+    print('Total of {} retweets from {} roots.\
+    With 300 queries per hour this should take {:.3f} minutes ({:.3f} hours)'.format(n_retweets, n_roots, n_roots/5, n_roots/300))
+    t1 = pytime.time()
+    
+    for i, root in enumerate(roots):
+        if os.path.isfile(f'retweets/{retrieved_conv_ids[i]}.jsonl'):
+            continue
+        
+        # DECISION: Heuristic to get rid of links in tweets
+        root_text = root['text'].split('https://t.co/')[0]
+        
+        # Handle quotation marks
+        if root_text.find('"') != -1:
+            root_text = handle_quotes(root_text)
+            print('Handled quotation marks; text:', root_text)
+        
+        root_author = root['id']
+        
+        # Modify the expansion fields as well? See twitter or Postman WS for allowed values
+        results = full_archive_search(query_=f'retweets_of:{root_author} "{root_text}"', max_results_pp=500,
+                                      tweet_fields_='id,author_id,referenced_tweets,created_at', user_fields_='id',
+                                      media_fields_='type', poll_fields_='id', place_fields_='id')
+        
+        # Debug prints
+        #NRT = root['n_retweets']
+        #print(f'full archive search yielded {len(results)} results; the root has {NRT} retweets')
+        
+        retweets = []
+        for retweet in results:
+            for t in retweet['referenced_tweets']:
+                if t['id'] == retrieved_conv_ids[i]:
+                    # Append to file here? How many results do we expect?
+                    retweets.append(retweet)
+                    break
+        append_objs_to_file(f'retweets/{retrieved_conv_ids[i]}.jsonl', retweets)
+        logging.info(f'Retrieved {len(retweets)} retweets to conversation {retrieved_conv_ids[i]}.')
+        
+    t2 = pytime.time() - t1
+    logging.info(f'Retweets retrieval took {t2} seconds.')
+    print('Finished in {:.3f} minutes ({:.3f} hours)'.format(t2/60, t2/3600))
+    
+    return
+    
+
+def retweet_metrics(conv_ids: list[str]) -> None:
     """Computes retweet metrics and print to a file.
     Plots retweets over time from the initial post.
     Saves images to 'sampled_conversation_graphs' folder.
+    
+    NOTE: Implicitly assumes that get_root_tweets() has
+    been called through get_retweets_of() for these
+    conversation IDs.
     
     TODO (suggestions): Save retweet times to files, and
     use this information in another function.
@@ -403,7 +581,8 @@ def retweets_metrics(conv_ids: list[str]) -> None:
         n_retweets.append(len(retweets))
         root_followers.append(root['author']['public_metrics']['followers_count'])
         
-        engagement_time = []   
+        engagement_time = []
+        # Root is poster first, no further adjustments to time needed
         t0 = datetime.datetime.strptime(root['created_at'], '%Y-%m-%dT%H:%M:%S.000Z')
         for rt in retweets:
             time = datetime.datetime.strptime(rt['created_at'], '%Y-%m-%dT%H:%M:%S.000Z')
@@ -416,13 +595,12 @@ def retweets_metrics(conv_ids: list[str]) -> None:
             final_rt_time.append(engagement_time[-1])
         else:
             final_rt_time.append(0)
-        #for i in range(len(engagement_time)):
-        #    engagement_time[i] = engagement_time[i] - engagement_time[-1]
         
-        create_hist(engagement_time, bins=50, path='sampled_conversations_graphs/{conv_id}_retweets.svg',
+        
+        create_hist(engagement_time, bins=50, path=f'sampled_conversations_graphs/{conv_id}_retweets.svg',
                 title='Engagement times', xlab='time (h)', ylab='counts')
 
-    create_scatter_plot(n_retweets, root_followers, 'sampled_conversations_graphs/retweets_vs_followers.svg',
+    create_scatter_plot(n_retweets, root_followers, path='sampled_conversations_graphs/retweets_vs_followers.svg',
                         title='Retweets as a function of followers', xlab='followers', ylab='retweets')
     create_scatter_plot(final_rt_time, root_followers, 'sampled_conversations_graphs/followers_vs_final_time.svg',
                         title='Final engagement time', xlab='final retweet time (h)', ylab='number of followers')
@@ -443,20 +621,91 @@ def retweets_metrics(conv_ids: list[str]) -> None:
     return
 
 
-def get_conversation_dict(conv_tweets: list[dict]) -> tuple(dict, list):
+def reply_metrics(conv_ids: list[str]):
+    """Computes reply metrics for a conversation and
+    saves to folder.
+    
+    NOTE: Assumes that get_root_tweets() has been
+    called for these conversation IDs. This is
+    automatically fulfilled through calling
+    get_retweets_of() with the conversation IDs
+    as argument. get_root_tweets() also be called
+    separately.
+    
+    Args:
+        - conv_ids: list of conversation IDs to compute
+        metrics for
+        
+    No return value.
+    """
+
+    n_authors_conv = []
+    n_replies_conv = []
+    n_deg_out_conv = []
+    t_final_reply = []
+    out_conv_id = []
+    
+    for conv_id in conv_ids: 
+        
+        root_path = f'root_tweets/{conv_id}_root.jsonl'
+        if os.path.isfile(root_path):
+            root = read_file(root_path)[0]
+            out_conv_id.append(conv_id)
+        else:
+            continue
+
+        conversation = read_file(f'sampled_conversations/{conv_id}')
+        
+        conv_dict, engagement_time, n_authors = get_conversation_dict(conversation, root)
+        
+        n_authors_conv.append(n_authors)
+        n_replies_conv.append(len(conv_dict))
+        t_final_reply.append(max(engagement_time))
+        
+        deg_out = 0
+        for tweetID in conv_dict:
+            # If root author replies to someone else [TODO: control for author]
+            if conv_dict[tweetID]['author_id'] == root['author_id'] and conv_dict[tweetID]['referenced_author_id'] != root['author_id']:
+                deg_out += 1
+        
+        n_deg_out_conv.append(deg_out)
+        
+    # plot figures
+    t_query = datetime.datetime.utcnow().strftime('%Y-%m-%d_%H-%M-%S')
+    create_scatter_plot(n_authors_conv, n_replies_conv,
+                        path=f'sampled_conversations_graphs/authors_replies_{t_query}.svg',
+                        title='Authors and replies', xlab='number of authors', ylab='number of replies')
+    create_scatter_plot(n_authors_conv, t_final_reply,
+                        path=f'sampled_conversations_graphs/authors_t_final_{t_query}.svg',
+                        title='Authors and time for last reply', xlab='number of authors',
+                        ylab='time of final reply (h)')
+    create_hist(n_replies_conv, bins=50,
+                path=f'sampled_conversations_graphs/replies_distribution_{t_query}.svg',
+                title='Replies in conversations', xlab='number of replies', ylab='counts')
+    create_hist(n_authors_conv, bins=50,
+                path=f'sampled_conversations_graphs/authors_distribution_{t_query}.svg',
+                title='Authors in conversations', xlab='number of authors', ylab='counts')
+    
+    return n_authors_conv, n_replies_conv, n_deg_out_conv, t_final_reply, out_conv_id
+        
+
+def get_conversation_dict(conv_tweets: list[dict], root: dict) -> tuple[dict, list, int]:
     """Returns a dictionary containing information on
     the tweets in the conversation along with a list
     of their engagement times in hours after tweet zero.
     Dictionaries in Python >3.7 are ordered.
     
     Args:
-        - conv_tweets: a list with tweet .json objects
+        - conv_tweets: a list with tweet .json objects, 
+        obtained from e.g., read_file()
         
     Returns:
         - conv_dict: a dictionary mapping tweet ids to tweet info
         - engagement_time: list of times in hours
+        - n_authors: number of authors participating in the conversation
     
     """
+    author_set = set()
     conv_dict = {}
     time_stamps = []
     for tw in conv_tweets:
@@ -471,6 +720,7 @@ def get_conversation_dict(conv_tweets: list[dict]) -> tuple(dict, list):
         except Exception as e:
             logging.warning(e)
 
+        author_set.add(tw['author_id'])
         conv_dict[tw['id']] = {'author_id':      tw['author_id'],
                                'author_name':    tw['author']['name'],
                                'time_stamp':     tw['created_at'],
@@ -482,16 +732,20 @@ def get_conversation_dict(conv_tweets: list[dict]) -> tuple(dict, list):
         time_stamps.append(tw['created_at'])
         
     engagement_time = []
-    t0 = datetime.datetime.strptime(time_stamps[0], '%Y-%m-%dT%H:%M:%S.000Z')
+    t0 = datetime.datetime.strptime(root['created_at'], '%Y-%m-%dT%H:%M:%S.000Z')
     for ts in time_stamps:
         time = datetime.datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S.000Z')
         dt = time-t0
         engagement_time.append((86400*dt.days + dt.seconds)/3600)
 
-    for i in range(len(engagement_time)):
-        engagement_time[i] = engagement_time[i] - engagement_time[-1]
+    # Needed if we use the results of conv. query and not root tweet time
+    #for i in range(len(engagement_time)):
+    #    engagement_time[i] = engagement_time[i] - engagement_time[-1]
         
-    return conv_dict, engagement_time
+    n_authors = len(author_set)
+        
+    return conv_dict, engagement_time, n_authors
+
 
 def create_conversation_network(conv_dict, engagement_time):
     """Returns a directed networkx graph of the conversation network
@@ -839,7 +1093,7 @@ def create_conversation_graphs(dir_, show_plot=False, plot_with_colors=True):
 
         conv_sample = read_file(f'sampled_conversations/{conv_file_name}')
 
-        conv_dict, engagement_time = get_conversation_dict(conv_sample)
+        conv_dict, engagement_time, n_authors = get_conversation_dict(conv_sample)
 
         dir_graph_sample = create_conversation_network(conv_dict, engagement_time)
         
