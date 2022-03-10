@@ -2,14 +2,17 @@ import os
 import json
 import logging
 import datetime
-import threading
+import threading # for sampling from stream
 import numpy as np
 import pandas as pd
 import time as pytime
-import seaborn as sns
 import networkx as nx
+from file_manip import *
 import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
 from twarc import Twarc2, expansions
+# import seaborn as sns # plotting tools
+
 
 academic_access = True
 
@@ -21,6 +24,7 @@ else:
         BEARER_TOKEN = file.read()
 
 client = Twarc2(bearer_token=BEARER_TOKEN)
+
 
 def print_dict(d: dict, indent: str) -> None:
     """Prints the keys of a dictionary to visualize the
@@ -42,84 +46,6 @@ def print_dict(d: dict, indent: str) -> None:
     if indent == ' ':
         print(" ")
         
-    return
-
-
-def append_ids_to_file(file_name: str, result: list) -> None:
-    """Append a file with the 'id' attribute of a list of objects.
-    Use case is dehydration of tweets or users, e.g., write the
-    tweetIDs of a list of tweets.
-    
-    Args:
-        - file_name: name of the file to append
-        - result: list of objects to append, retrieved
-        from expansions.flatten(result_page)    
-        
-    No return value.
-    """
-    with open(file_name, 'a+') as filehandle:
-        for element in result:
-                filehandle.write('%s\n' % element['id'])    
-                
-                
-def append_objs_to_file(file_name: str, result: list) -> None:
-    """Append a file with the objects in result.
-    Use case: append a file with a flattened search
-    query (tweets, users etc.).
-    
-    Args:
-        - file_name: name of the file to append
-        - result: list of objects to append, retrieved
-        from expansions.flatten(result_page)
-        
-    No return value.
-    """
-    with open(file_name, 'a+') as filehandle:
-        for obj in result:
-            filehandle.write('%s\n' % json.dumps(obj))
-                
-                
-def read_file(file_name: str) -> list[dict]:
-    """Returns a list of the contents in a .jsonl-file.
-    
-    Args:
-        - file_name: name of the file to read
-        
-    Returns:
-        - objs: list of json objects in the file
-    """
-    objs = []
-    with open(file_name, 'r') as filehandle:
-        for obj in filehandle:
-            objs.append(json.loads(obj))
-    return objs
-
-    
-def file_generator(file_name: str):
-    """Returns a generator to the contents in a file.
-    
-    Args:
-        - file_name: name of the file to read
-        
-    Yields:
-        - obj: a json objects in the file
-    """
-    with open(file_name, 'r') as filehandle:
-        for obj in filehandle:
-            yield json.loads(obj)
-    
-    
-def write_warning(file_name: str, warning: str) -> None:
-    """Writes a warning to a text_file.
-    
-    Args:
-        - file_name: name of the file to read
-        - warning: warning text to write
-    
-    No return value.    
-    """
-    with open(file_name, 'a+', encoding='utf-8') as filehandle:
-        filehandle.write('%s\n' % warning)
     return
 
 
@@ -149,9 +75,11 @@ def create_plot(x, y, path: str, format_='-', title='', xlab='', ylab='') -> Non
     return
 
 
-def create_hist(x, bins, path: str, title='', xlab='', ylab='', log_=False) -> None:
+def create_hist(x, bins, path: str, title='', xlab='', ylab='',
+                log_=False, overlay_line=False, t=None, y=None) -> None:
     """Plot data x and y in a histogram and save
-    to the provided path.
+    to the provided path. Optionally plots a line
+    over the histogram.
     
     Args:
         - x: data for x axis (list or array)
@@ -161,6 +89,9 @@ def create_hist(x, bins, path: str, title='', xlab='', ylab='', log_=False) -> N
         - title: figure title
         - xlab: x-axis label
         - ylab: y-axis label
+        - overlay_line: plots line points (t,y) over histogram
+        - t: x-values of overlaid line
+        - y: y-values of overlaid line
         
     Returns:
         - n: values of the histogram bins
@@ -171,7 +102,11 @@ def create_hist(x, bins, path: str, title='', xlab='', ylab='', log_=False) -> N
     plt.title(title, size=24)
     plt.xlabel(xlab, size=18)
     plt.ylabel(ylab, size=18)
-    plt.savefig(path)
+    
+    if overlay_line and t is not None and y is not None:
+        plt.plot(t,y,'r')
+    
+    plt.savefig(path) 
     
     return n, bs
 
@@ -326,6 +261,7 @@ def get_retweeters(tweet_id: str) -> list[str]:
         for retweeter in res:
             retweeters.append(retweeter['id'])
     return retweeters
+
 
 def get_single_root(root_id: str) -> bool:
     """Retrieves a single (root) tweet defined by root_id.
@@ -640,7 +576,7 @@ def get_all_retweets(conv_ids: list[str]) -> None:
             root_text = handle_quotes(root_text)
             print(f'Handled quotation marks in conversation {retrieved_conv_ids[i]}; text:', root_text)
         elif not root_text:
-            write_warning('skipped_retweets.txt', 'skipping conversation {} (text: {})'.format(retrieved_conv_ids[i], root['text']))
+            write_text('skipped_retweets.txt', 'skipping conversation {} (text: {})'.format(retrieved_conv_ids[i], root['text']))
             no_text_roots += 1
             continue
         
@@ -746,6 +682,259 @@ def mean_square_error_fo(bin_values, beta: float, lambda_: float) -> float:
     return MSE
 
 
+def mean_square_error_ct(time, true_engagement, lambda_: float, beta_: float) -> float:
+    """Computes the mean square error in continuous time.
+    
+    Args:
+        - time: time vector for the observations
+        - true_engagement: engagement at times
+        specified in time vector
+        - lambda_: (optimal) decay constant
+        - beta_: parameter modelling the initial
+        response to the tweet
+        
+    Returns:
+        - MSE: mean square error
+    """
+    
+    eng_ct = exponential(time, lambda_, beta_)
+    MSE = np.mean(np.square(eng_ct - true_engagement))
+    
+    return MSE
+
+
+def exponential(x_, lambda_, beta_):
+    """Exponential decay with parameters lambda and beta."""
+    return beta_*np.exp(-lambda_*x_)
+
+
+def power(x_, lambda_, beta_):
+    """Power law."""
+    return beta_*(np.power(np.array(x_, dtype=float), -lambda_))
+
+
+def estimate_decay_parameters(time, engagement):
+    """Returns an estimate of the parameters of the
+    exponential decay function of engagement over time.
+    
+    Args:
+        - time: time vector
+        - engagement: engagement at times specified
+        in time vector
+        
+    Returns:
+        - popt: optimal parameters
+    """
+    # lower and upper bounds on lambda and beta:
+    # 1e-4 <= lambda <= 1e3, and 1 <= beta <= 1e9.
+    bounds_ = ([1e-4, 1], [1e3, 1e9])
+    init = [1, 1]
+    
+    # Optimization: Trust Region Reflective algorithm 'trf'
+    # Levenberg-Marquardt ('lm') does not handle parameter bounds
+    method_ = 'trf'
+    
+    popt, _ = curve_fit(exponential, time, engagement, p0=init,
+                     bounds=bounds_, method=method_)
+    return popt
+
+
+def peak_detection(e, lag, threshold, influence):
+    """Peak detection algorithm using deviation from moving median to
+    find peaks in histograms.
+    
+    From: J.P.G. van Brakel. Robust peak detection algorithm (using z-scores), 2019.
+    https://stackoverflow.com/questions/22583391/peak-signal-detection-in-realtimetimeseries-data.
+    
+    Args:
+        - e: engagement histogram values
+        - lags: size of the moving window
+        - threshold: number of standard deviations required to trigger detection
+        - influence: influence of the next sample to the mean
+    
+    Returns:
+        - A dictionary that contains the peak detection signal: with elements
+        in {1-,0,1}, indicating a negativ peak, no peak, or positive peak; the
+        moving median, and the moving standard deviation.
+    """
+    
+    signals = np.zeros(len(e))
+    filteredE = np.array(e)
+    avgFilter = [0]*len(e)
+    stdFilter = [0]*len(e)
+    avgFilter[lag - 1] = np.mean(e[0:lag])
+    stdFilter[lag - 1] = np.std(e[0:lag])
+    
+    # For each data point
+    for i in range(lag, len(e) - 1):
+        
+        # Detect a deviation from the median +/- threshold*std
+        if abs(e[i] - avgFilter[i-1]) > threshold * stdFilter[i-1]:
+            if e[i] > avgFilter[i-1]:
+                signals[i] = 1 # positive peak
+            else:
+                signals[i] = -1 # negative peak
+
+            # Less influence from peak data
+            filteredE[i] = influence * e[i] + (1 - influence) * filteredE[i-1]
+        else:
+            # No peak detected, no less influence
+            signals[i] = 0
+            filteredE[i] = e[i]
+        
+        avgFilter[i] = np.mean(filteredE[(i-lag):i])
+        stdFilter[i] = np.std(filteredE[(i-lag):i])
+
+    return dict(signals = np.asarray(signals),
+                avgFilter = np.asarray(avgFilter),
+                stdFilter = np.asarray(stdFilter),
+                lag=lag,
+                threshold=threshold,
+                influence=influence)
+
+
+def filter_peaks(result, y, peak_threshold: float, adj_dist=1):
+    """Filters out the desired peaks from the result of the peak
+    detection algorithm. Returns the peak coordinates.
+    
+    Args:
+        - result: the result dictionary of the peak detection algorithm
+        - y: engagement histogram values
+        - peak_threshold: fraction of global maximum a peak must attain
+        in order not to be filtered out
+        - adj_dist: max distance between adjacent peaks; these will be
+        reduced to the highest peak
+        
+    Returns:
+        - peaks_x: x-coordinate for the relevant peaks
+        - peaks_y: y-coordinate for the relevant peaks
+    """
+    
+    xx, yy= [], []
+    
+    assert peak_threshold >= 0 and peak_threshold <= 1
+    glob_max = max(y)
+    
+    # Filter out peaks below the global threshold
+    for i,r in enumerate(result["signals"]):
+        if r==1 and y[i] > peak_threshold*glob_max:
+            xx.append(i+1)
+            yy.append(y[i])
+
+    #print(xx, yy)
+    peaks_x, peaks_y = [], []
+    
+    prev_x = xx[0]
+    segment_x, segment_y = [xx[0]], [yy[0]]
+    curr_max, curr_max_y = xx[0], yy[0]
+
+    # Filter out adjacent peaks
+    for i in range(1, len(xx)):
+        if xx[i] > prev_x + adj_dist:
+            #print(f'{xx[i]}!={prev_x+adj_dist}; peak = ({curr_max},{curr_max_y})')
+            peaks_x.append(curr_max)
+            peaks_y.append(curr_max_y)
+            
+            segment_y = [yy[i]]
+            segment_x = [xx[i]]
+            curr_max = xx[i]
+            curr_max_y = yy[i]
+        else:
+            if curr_max_y < yy[i]:
+                curr_max = xx[i]
+                curr_max_y = yy[i]
+            segment_x.append(xx[i])
+            segment_y.append(yy[i])
+            
+        prev_x = xx[i]
+            
+    peaks_x.append(curr_max)
+    peaks_y.append(curr_max_y)
+    
+    valleys = []
+    for i in range(1,len(peaks_x)):
+        if peaks_x[i] > peaks_x[i-1] + 3:
+            valleys.append((peaks_x[i-1],peaks_x[i]))
+    #print(valleys)
+    #print(peaks_x, peaks_y)
+    
+    return peaks_x, peaks_y # xx, yy
+
+
+def plot_peak_detection(y, result, conv_id):
+    """Plots the peaks from the raw result of the detection algorithm.
+    The result data is filtered before plotting.
+    
+    Args:
+        - y: the engagement histogram values
+        - result: result dictionary of the peak detection algorithm
+        - conv_id: conversation id
+        
+    Returns:
+        - type_: the type of engagement graph, first position
+        indicates delay (1X) or no delay (0X), the second position
+        indicates a single peak (0), double peak (2), bump (3), or
+        multiple peaks (4).
+        - first_peak: bin number of the first peak (i.e., delay).
+        Chosen as the largest of the first two peaks, or -1 in
+        the odd case that there is no peak.
+    """
+    
+    peaks_x, peaks_y = filter_peaks(result, y, peak_threshold=0.15, adj_dist=2)
+    
+    # DECISION: We use the heuristic to pick the largest of the two first peaks
+    type_ = 0
+    if len(peaks_x) != 0:
+        if peaks_x[0] <= result['lag']+1:
+            type_ += 0 # NOP
+        else:
+            type_ += 10
+        
+        if len(peaks_x) == 1:
+            first_peak = peaks_x[0] - result['lag'] - 1
+        else:
+            if peaks_y[0] > peaks_y[1]:
+                first_peak = peaks_x[0] - result['lag'] - 1
+            else:
+                first_peak = peaks_x[1] - result['lag'] - 1
+        
+        if (len(peaks_x) == 2) and (min(peaks_y[0], peaks_y[1]) > 0.45*max(peaks_y[0], peaks_y[1])):
+            type_ += 1
+        elif len(peaks_x) == 2:
+            type_ += 2
+        elif len(peaks_x) > 2:
+            type_ += 3
+    else:
+        first_peak = -1
+        type_ = 4
+    
+    
+    plt.figure(figsize=(8,8))
+    #plt.subplot(211)
+    plt.plot(np.arange(1, len(y)+1), y, color='navy', lw=2)
+
+    plt.plot(np.arange(1, len(y)+1),
+               result["avgFilter"], '--', color='gold', lw=1)
+
+    plt.plot(peaks_x, peaks_y, 'o', color='red')
+
+    plt.plot(np.arange(1, len(y)+1),
+               result["avgFilter"] + result['threshold'] * result["stdFilter"], color="sienna", lw=0.8)
+
+    plt.plot(np.arange(1, len(y)+1),
+               result["avgFilter"] - result['threshold'] * result["stdFilter"], color="sienna", lw=0.8)
+
+    #plt.subplot(212)
+    suppressed = [i for i,r in enumerate(result['signals']) if r > 0]
+    supp_y = -1*np.ones(len(suppressed))
+    plt.plot(suppressed, supp_y, 'o', color='salmon')
+    #plt.step(np.arange(1, len(y)+1), result["signals"], color="red", lw=2)
+    #plt.ylim(-1.5, 1.5)
+    plt.savefig(f'sampled_conversations_graphs/peak_detection/{type_}/{conv_id}_peaks2.png')
+
+    return type_, first_peak
+
+
 def process_engagement_times(conv_ids: list[str], delta_sec: float) -> None:
     """Retrieves the engagement times of retweets and replies.
     
@@ -754,8 +943,7 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float) -> None:
         - delta_sec: the time step length in seconds
         of the time series discretization in seconds
         
-    Returns:   
-        -
+    No return value.
     """
 
     out_conv_id = []
@@ -763,7 +951,7 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float) -> None:
     sufficient = 0
     missing_data = 0
     too_few = 0
-    
+    opt_failed = 0
     
     # TODO: Iterate through conversations
     # Iterate with generator from filter(all_files_exist, conv_ids)?
@@ -785,9 +973,14 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float) -> None:
         
         engagement_time = []
         
+        replying_users = set()
+        
         # TODO: Iterate over file generators and retrieve times of engagement
         for re in file_generator(conv_path):
             engagement_time.append(compute_relative_time(root['created_at'], re['created_at']))
+            replying_users.add(re['author_id'])
+        
+        n_replies = len(engagement_time)
         
         for rt in file_generator(retw_path):
             engagement_time.append(compute_relative_time(root['created_at'], rt['created_at']))
@@ -800,6 +993,7 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float) -> None:
         else:
             sufficient += 1
         
+        reply_ratio = n_replies / len(engagement_time)
         
         # TODO: Plot histogram of engagement over time
         # Bin and estimate engagement curve (time series with increments of delta_t)
@@ -808,27 +1002,66 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float) -> None:
         n_bins = int((mx//delta_h) + 2) # Add 2 to compensate for integer division and endpoint in linspace
         bins = np.linspace(start=0, stop=n_bins*delta_h, num=n_bins, endpoint=False, retstep=False, dtype=None, axis=0)
         
-        n, _ = create_hist(engagement_time, bins, path=graph_path,
-                           title='Engagement over time (replies and RTs)',
-                           xlab='time (h)', ylab='counts (replies and retweets)', log_=False)
+        #n, _ = create_hist(engagement_time, bins, path=graph_path,
+        #                   title='Engagement over time (replies and RTs)',
+        #                   xlab='time (h)', ylab='counts (replies and retweets)', log_=False,
+        #                   overlay_line=False, t=None, y=None)
         
-        #n, bs = np.histogram(engagement_time, bins)
-        #
+        n, bs = np.histogram(engagement_time, bins)
+        
+        lag = 10
+        threshold = 1.5
+        influence = 0.8
+        rng=np.random.default_rng(123)
+        rd = np.zeros(lag) # np.abs(rng.standard_normal(lag))
+        time_series = np.concatenate((rd,n))#/max(n)
+        result = peak_detection(time_series, lag=lag, threshold=threshold, influence=influence)
+        type_, first_peak = plot_peak_detection(time_series, result, conv_id)
+        
+        root_followers = root['author']['public_metrics']['followers_count']
+        # print("Replying users:", len(replying_users))
+        
+        #write_text(file_name='sampled_conversations_graphs/peak_detection/peak_types.txt',
+        #           text=f'{conv_id},{root_followers},{len(replying_users)},{n_replies},{type_},{first_peak},{reply_ratio}')
+        
         #acE = auto_correlate(n, symmetric=False)
         #create_plot(x=acE, y=None, path=f'sampled_conversations_graphs/engagement_correlation/{conv_id}_corr.png',
         #            format_='-', title='Autocorrelation of engagement',
         #            xlab=f'time (dt={delta_sec} seconds)', ylab='correlation')
         
         # Time vector (center of bins)
-        # t = (bins[1:] + bins[:-1])/2
+        t = (bins[1:] + bins[:-1])/2
         
-        # TODO: Estimate the parameters of the chosen model
-        # Do when we have a feeling for the shape of the engagement curves
+        try:
+            # Take the delay into account (TODO: also in the MSE computation)
+            #if type_ >= 10:
+            if first_peak > 0:
+                t = t[first_peak:] - delta_h*first_peak
+                n = n[first_peak:]
+            else:
+                first_peak = 0
+                
+            opt_params = estimate_decay_parameters(t, n)
+            lambda_, beta_ = opt_params[0], opt_params[1]
+
+            MSE = mean_square_error_ct(t, n, lambda_, beta_)
+
+            write_text(file_name='parameter_estimations/estimations_delay.txt',
+                       text=f'{conv_id},{root_followers},{len(replying_users)},{type_},{first_peak},{lambda_},{beta_},{MSE},{n_replies},{reply_ratio}')
+          
+            model_eng = exponential(t, lambda_, beta_)
+            graph_path_line = f'sampled_conversations_graphs/engagement_histograms/{conv_id}_repl_retw_ds{int(delta_sec)}_delay-line.png'
+            _, _ = create_hist(engagement_time, bins, path=graph_path_line,
+                               title='Engagement over time (replies and RTs)',
+                               xlab='time (h)', ylab='counts (replies and retweets)', log_=False,
+                               overlay_line=True, t=t+delta_h*first_peak, y=model_eng)
+        except Exception as e:
+            logging.warning(e)
+            logging.info(f'optimization failed for conversation {conv_id}: replies:{n_replies}, reply_ratio:{reply_ratio}')
+            sufficient -= 1
+            opt_failed += 1
         
-        # TODO: Evaluate the model fit with some metric
-        # Use MSE to evaluate deviance from predicted response with parameters?
-        
-    print('Plots: {}, missing data: {}, too few data points: {}'.format(sufficient, missing_data, too_few))
+    print('Plots: {}, missing data: {}, too few data points: {}, optimization failed: {}'.format(sufficient, missing_data, too_few, opt_failed))
     
     return
 
