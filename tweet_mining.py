@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 import datetime
@@ -72,6 +73,7 @@ def create_plot(x, y, path: str, format_='-', title='', xlab='', ylab='') -> Non
     plt.xlabel(xlab, size=18)
     plt.ylabel(ylab, size=18)
     plt.savefig(path)
+    plt.close('all')
     return
 
 
@@ -106,8 +108,8 @@ def create_hist(x, bins, path: str, title='', xlab='', ylab='',
     if overlay_line and t is not None and y is not None:
         plt.plot(t,y,'r')
     
-    plt.savefig(path) 
-    
+    plt.savefig(path)
+    plt.close('all')
     return n, bs
 
 
@@ -134,6 +136,7 @@ def create_loglog_hist(x, n_bins, path: str, title='', xlab='', ylab='') -> None
     plt.ylabel(ylab+' (log scale)', size=18)
     plt.xscale('log')
     plt.savefig(path)
+    plt.close('all')
     return
 
 
@@ -167,6 +170,7 @@ def create_ccdf(data, path: str, title='', xlab='', ylab='', loglog=False) -> No
         plt.xlabel(xlab, size=18)
         plt.ylabel(ylab, size=18)
     plt.savefig(path)
+    plt.close('all')
     return
 
 
@@ -512,17 +516,18 @@ def not_space(s: str) -> bool:
     """
     return not (s.isspace() or not s)
 
-def handle_quotes(s: str) -> str:
-    """Removes quotation marks from the string
-    where they would cause an error if passed
-    to the API. Used when fetching retweets
-    and querying on the tweet text. Seems to work
-    for right-to-left languages as well (e.g.,
-    Arabic and Hebrew.)
+def handle_special(s: str) -> str:
+    """Removes quotation marks and special
+    characters (such as ampersands etc.) from
+    the string where they would cause an error
+    if passed to the API. Used when fetching
+    retweets and querying on the tweet text.
+    Seems to work for right-to-left languages
+    as well, e.g., Arabic and Hebrew.
     
     Args:
         - s: string that contains quotation
-        marks ("), and a hyperlink removed.
+        marks (" or '), and a hyperlink removed.
         
     Returns:
         - a string with quotation marks in the
@@ -530,7 +535,11 @@ def handle_quotes(s: str) -> str:
         in the string, and no quotation marks at
         the end or beginning of the string.
     """
-    s_list = s.split('"')
+    #s_list = s.split('"')
+    s_list = re.split('\'|"|&amp;|&gt;|&lt;', s)
+    # TODO/Decision: Heuristic: If there is a string that has more than 20 characters in it
+    # it alone may be used as a query to minimize the risk of other special characters
+    # messing up the query
     return '" "'.join(filter(not_space, s_list))
 
 
@@ -573,7 +582,7 @@ def get_all_retweets(conv_ids: list[str]) -> None:
         
         # Handle quotation marks
         if root_text.find('"') != -1:
-            root_text = handle_quotes(root_text)
+            root_text = handle_special(root_text)
             print(f'Handled quotation marks in conversation {retrieved_conv_ids[i]}; text:', root_text)
         elif not root_text:
             write_text('skipped_retweets.txt', 'skipping conversation {} (text: {})'.format(retrieved_conv_ids[i], root['text']))
@@ -616,6 +625,26 @@ def get_all_retweets(conv_ids: list[str]) -> None:
     
     return
     
+
+def remove_missing_rt_files() -> None:
+    """Checks for retweet files that should contain something,
+    but are empty. Puts the missing files in another folder.
+    
+    No args or return value. Results are logged.
+    """
+    
+    for f in os.listdir('retweets'):
+        c_id = f.split('.')[0]
+        size = os.stat(f'retweets/{f}').st_size
+        root = read_file(f'root_tweets/{c_id}_root.jsonl')[0]
+        n_rts = root['public_metrics']['retweet_count']
+
+        if size == 0 and n_rts != 0:
+            os.rename(f'retweets/{f}', f'missing_rts/{f}')
+            logging.info(f'moved retweets/{f} to missing_rts/{f}')
+        else:
+            logging.info(f'retweets/{f} of size {size} (with {n_rts} retweets) not moved')
+
 
 def compute_relative_time(t0: str, t: str) -> float:
     """Returns the time offset in hours of a time point t
@@ -909,7 +938,7 @@ def plot_peak_detection(y, result, conv_id):
         type_ = 4
     
     
-    plt.figure(figsize=(8,8))
+    plt.figure(figsize=(8,8), clear=True)
     #plt.subplot(211)
     plt.plot(np.arange(1, len(y)+1), y, color='navy', lw=2)
 
@@ -931,12 +960,15 @@ def plot_peak_detection(y, result, conv_id):
     #plt.step(np.arange(1, len(y)+1), result["signals"], color="red", lw=2)
     #plt.ylim(-1.5, 1.5)
     plt.savefig(f'sampled_conversations_graphs/peak_detection/{type_}/{conv_id}_peaks2.png')
+    plt.close('all')
 
     return type_, first_peak
 
 
 def process_engagement_times(conv_ids: list[str], delta_sec: float) -> None:
     """Retrieves the engagement times of retweets and replies.
+    Only considers conversations where root, conversation, and
+    retweet files exist.
     
     Args:
         - conv_ids: list of conversation IDs
@@ -1044,13 +1076,13 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float) -> None:
             opt_params = estimate_decay_parameters(t, n)
             lambda_, beta_ = opt_params[0], opt_params[1]
 
-            MSE = mean_square_error_ct(t, n, lambda_, beta_)
+            mse = mean_square_error_ct(t, n, lambda_, beta_)
 
             write_text(file_name='parameter_estimations/estimations_delay.txt',
-                       text=f'{conv_id},{root_followers},{len(replying_users)},{type_},{first_peak},{lambda_},{beta_},{MSE},{n_replies},{reply_ratio}')
+                       text=f'{conv_id},{root_followers},{len(replying_users)},{type_},{first_peak},{lambda_},{beta_},{mse},{n_replies},{reply_ratio}')
           
             model_eng = exponential(t, lambda_, beta_)
-            graph_path_line = f'sampled_conversations_graphs/engagement_histograms/{conv_id}_repl_retw_ds{int(delta_sec)}_delay-line.png'
+            graph_path_line = f'sampled_conversations_graphs/engagement_histograms/{type_}/{conv_id}_repl_retw_ds{int(delta_sec)}_delay-line.png'
             _, _ = create_hist(engagement_time, bins, path=graph_path_line,
                                title='Engagement over time (replies and RTs)',
                                xlab='time (h)', ylab='counts (replies and retweets)', log_=False,
@@ -1064,6 +1096,77 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float) -> None:
     print('Plots: {}, missing data: {}, too few data points: {}, optimization failed: {}'.format(sufficient, missing_data, too_few, opt_failed))
     
     return
+
+
+def undirected_message_tree(conv_id: str) -> nx.Graph:
+    """Returns an undirected graph (tree) that represents the
+    messages in a conversation. The graph is empty if any of
+    the root or conversation files are missing. The graph is
+    not guaranteed to be connected.
+    
+    Args:
+        - conv_id: a single conversation ID
+        
+    Returns:
+        - G: a conversation graph
+    """
+    
+    root_path = f'root_tweets/{conv_id}_root.jsonl'
+    conv_path = f'sampled_conversations/{conv_id}_conversation-tweets.jsonl'
+    
+    G = nx.Graph()
+    
+    if not os.path.isfile(root_path) or not os.path.isfile(conv_path):
+        return G
+    
+    for re in file_generator(conv_path):
+        for ref_tw in re['referenced_tweets']:
+            if ref_tw['type'] == 'replied_to':
+                G.add_edge(re['id'], ref_tw['id'])
+                break
+    return G
+
+
+def compute_radii(conv_ids: list[str]) -> list[int]:
+    """Computes and saves the radii of conversations graphs,
+    i.e., the maximum depth of the conversation tree. Ignores
+    the conversations that fewer than 90% of nodes connected
+    to the root. The result is stored in graph_radius.txt in
+    the parameter_estimations folder.
+    
+    Args:
+        - conv_ids: list of conversation IDs
+        
+    Returns:
+        - rad: vector of conversation radii
+    """
+    rad = []
+    connected = 0
+    for c_id in conv_ids:
+                        
+        G = undirected_message_tree(c_id)
+        
+        if not G.has_node(c_id):
+            continue
+        
+        n_nodes = len(list(G.nodes))
+        # Allow for unconnected graphs if the component that contains
+        # the root tweet has more than 90% of all nodes.
+        if n_nodes > 0:
+            if nx.is_connected(G):
+                r = nx.radius(G)
+                rad.append(r)
+                write_text('parameter_estimations/graph_radius.txt', f'{c_id},{nx.radius(G)}')
+                connected += 1
+            else:
+                nodes_largest_cc = nx.node_connected_component(G, c_id)
+                if len(nodes_largest_cc) >= 0.9*n_nodes:
+                    r = nx.radius(G.subgraph(nodes_largest_cc))
+                    rad.append(r)
+                    write_text('parameter_estimations/graph_radius.txt', f'{c_id},{r}')
+                    
+    print("{} conversations graphs were not sufficiently connected. Obtained results from {} conversations, of which {} were completely connected.".format(len(conv_ids)-len(rad), len(rad), connected))
+    return rad
 
 
 def retweet_metrics(conv_ids: list[str]) -> None:
@@ -1367,6 +1470,7 @@ def create_conversation_network(conv_dict, engagement_time):
     """      
     return DiG
 
+
 def create_conversation_network_tree(conv_dict, engagement_time):
     """Returns a directed networkx graph of the conversation network
     where the messages are nodes.
@@ -1422,7 +1526,7 @@ def plot_engagement(engagement_time, save_path=None):
     max_ = max(engagement_time)
     n_bins = max(10, int(max_*6)) # make one bin per 10 minutes
     
-    plt.figure(figsize=(9,9))
+    plt.figure(figsize=(9,9), clear=True)
     n, bs, _ = plt.hist(engagement_time, bins=n_bins)
     plt.title('Replies after posting')
     plt.xlabel('hours')
@@ -1431,11 +1535,12 @@ def plot_engagement(engagement_time, save_path=None):
         plt.savefig(save_path)
     else:
         plt.show()
-        
+    plt.close()
+
     n_norm = n/np.sum(n)
     cdf = np.cumsum(n_norm)
     cdf = np.concatenate((np.zeros(1), cdf)) # same length as bins
-    plt.figure(figsize=(9,9))
+    plt.figure(figsize=(9,9), clear=True)
     plt.plot(bs, cdf, '-')
     plt.title('Engagement CDF')
     plt.xlabel('hours')
@@ -1443,8 +1548,10 @@ def plot_engagement(engagement_time, save_path=None):
         plt.savefig(f'{save_path[:-4]}_cdf.svg')
     else:
         plt.show()
-    
+    plt.close()
+
     return
+
 
 def get_users(username, user_fields_='created_at,id,name,username,public_metrics'):
     """Returns a hydrated list of user profiles
@@ -1689,7 +1796,7 @@ def create_conversation_graphs(dir_, show_plot=False, plot_with_colors=True):
         if plot_with_colors:
             assign_time_attributes(dir_graph_sample)
 
-            plt.figure(figsize=(13,13))
+            plt.figure(figsize=(13,13), clear=True)
             vmax_ = int(engagement_time[-1]+1)
             nc = [v for k,v in nx.get_node_attributes(dir_graph_sample, 'time').items()]
             nx.draw_kamada_kawai(dir_graph_sample, with_labels=False, font_weight='bold', node_color = nc, vmin=0, vmax=vmax_, cmap = plt.cm.get_cmap('rainbow'))
@@ -1697,7 +1804,7 @@ def create_conversation_graphs(dir_, show_plot=False, plot_with_colors=True):
             if show_plot:
                 plt.show()
         else:
-            plt.figure(figsize=(13,13))
+            plt.figure(figsize=(13,13), clear=True)
             nx.draw_kamada_kawai(dir_graph_sample, with_labels=False)
             plt.savefig(f'sampled_conversations_graphs/{conv_id}_conversation_graph_users.svg')
             if show_plot:
@@ -1748,28 +1855,3 @@ def sample_num_retweets(dir_):
                     continue
                 
     return RTs, cid
-
-"""
-# Event controlled sampling
-thread_stop = threading.Event()
-thread_stop.clear()
-
-t_query = datetime.datetime.utcnow().strftime('%Y-%m-%d_%H-%M-%S')
-file_name = f'sampled_tweets_{t_query}.jsonl'
-
-def sample():
-    # Samples from the Twitter API stream. Used in a Thread.
-    # No arguments or return values.
-    
-    append_objs_to_file(file_name, client.sample(event=thread_stop))
-
-# Begin streaming tweets
-sample_thread = threading.Thread(target=sample)
-# sample_thread = threading.Thread(target=sample, args=[file_name]) # or args=(file_name,)
-sample_thread.daemon = True
-sample_thread.start()
-
-# Stop sampling
-thread_stop.set()
-
-"""
