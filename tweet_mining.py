@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 import time as pytime
 import networkx as nx
-from file_manip import *
+from file_manip import * # file I/O
+from plot_tools import * # plotting functions
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 from twarc import Twarc2, expansions
@@ -47,130 +48,6 @@ def print_dict(d: dict, indent: str) -> None:
     if indent == ' ':
         print(" ")
         
-    return
-
-
-def create_plot(x, y, path: str, format_='-', title='', xlab='', ylab='') -> None:
-    """Plot data x and y in a scatter plot and save
-    to the provided path.
-    
-    Args:
-        - x: data for x axis (list or array)
-        - y: data for y axis (list or array)
-        - path: path to save figure to
-        - title: figure title
-        - xlab: x-axis label
-        - ylab: y-axis label
-        
-    No return value.    
-    """
-    plt.figure(figsize=(8,8), clear=True)
-    if y is None:
-        plt.plot(x, format_, color='dodgerblue')
-    else:
-        plt.plot(x, y, format_, color='dodgerblue')
-    plt.title(title, size=24)
-    plt.xlabel(xlab, size=18)
-    plt.ylabel(ylab, size=18)
-    plt.savefig(path)
-    plt.close('all')
-    return
-
-
-def create_hist(x, bins, path: str, title='', xlab='', ylab='',
-                log_=False, overlay_line=False, t=None, y=None) -> None:
-    """Plot data x and y in a histogram and save
-    to the provided path. Optionally plots a line
-    over the histogram.
-    
-    Args:
-        - x: data for x axis (list or array)
-        - bins: integer or list/array that specifies the number of
-        bins to use or the bins limits.
-        - path: path to save figure to
-        - title: figure title
-        - xlab: x-axis label
-        - ylab: y-axis label
-        - overlay_line: plots line points (t,y) over histogram
-        - t: x-values of overlaid line
-        - y: y-values of overlaid line
-        
-    Returns:
-        - n: values of the histogram bins
-        - bs: bins generated or given
-    """
-    plt.figure(figsize=(8,8), clear=True)
-    n, bs, _ = plt.hist(x, bins, color='palegreen', log=log_)
-    plt.title(title, size=24)
-    plt.xlabel(xlab, size=18)
-    plt.ylabel(ylab, size=18)
-    
-    if overlay_line and t is not None and y is not None:
-        plt.plot(t,y,'r')
-    
-    plt.savefig(path)
-    plt.close('all')
-    return n, bs
-
-
-def create_loglog_hist(x, n_bins, path: str, title='', xlab='', ylab='') -> None:
-    """Plot data x and y in a histogram in log-log scale
-    and save to the provided path.
-    
-    Args:
-        - x: data for x axis (list or array)
-        - n_bins: integer that specifies the number of bins
-        - path: path to save figure to
-        - title: figure title
-        - xlab: x-axis label
-        - ylab: y-axis label
-        
-    No return value.    
-    """
-    
-    bins_ = np.concatenate((np.zeros(1), np.logspace(0, np.log10(max(x) + 1), num=n_bins, endpoint=True, base=10.0, dtype=None, axis=0)))
-    plt.figure(figsize=(8,8), clear=True)
-    plt.hist(x, bins_, color='palegreen', log=True)
-    plt.title(title, size=24)
-    plt.xlabel(xlab+' (log scale)', size=18)
-    plt.ylabel(ylab+' (log scale)', size=18)
-    plt.xscale('log')
-    plt.savefig(path)
-    plt.close('all')
-    return
-
-
-def create_ccdf(data, path: str, title='', xlab='', ylab='', loglog=False) -> None:
-    """Plot the complementary cumulative density
-    function (optionally in log-log scale).
-    
-    Args:
-        - data: data to plot
-        - path: path to save figure to
-        - title: figure title
-        - xlab: x-axis label
-        - ylab: y-axis label
-        - loglog: boolean indicating whether
-        the ccdf is plotted in loglog-scale
-    
-    """
-    sorted_x = np.sort(data)
-    n = len(data)
-    ccdf = [1 - i/n for i in range(1, n+1)]
-    
-    plt.figure(figsize=(8,8), clear=True)
-    plt.plot(sorted_x, ccdf, color='palegreen')
-    plt.title(title, size=24)
-    if loglog:
-        plt.xscale('log')
-        plt.yscale('log')
-        plt.xlabel(xlab+' (log scale)', size=18)
-        plt.ylabel(ylab+' (log scale)', size=18)
-    else:
-        plt.xlabel(xlab, size=18)
-        plt.ylabel(ylab, size=18)
-    plt.savefig(path)
-    plt.close('all')
     return
 
 
