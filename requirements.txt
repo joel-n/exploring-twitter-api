@@ -1,2 +1,8 @@
-twarc
 json
+networkx
+numpy
+matplotlib
+pandas
+scipy
+seaborn
+twarc>=2.10.1
