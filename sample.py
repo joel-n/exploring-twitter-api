@@ -11,7 +11,7 @@ import time
 import datetime
 import threading
 from twarc import Twarc2
-from tweet_mining import append_objs_to_file
+from file_manip import append_objs_to_file
 
 def main():
     sampling_seconds = int(sys.argv[1])
