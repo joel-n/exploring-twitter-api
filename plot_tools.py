@@ -93,7 +93,10 @@ def create_hist_scatter(x, bins, path: str, title='', xlab='', ylab='',
         - bs: bins generated or given
     """
     f, ax = plt.subplots(figsize=(8,8), clear=True)
-    n, bs, _ = plt.hist(x, bins, color='palegreen', log=log_)
+    cl = ['violet', 'palegreen','cornflowerblue'] if len(x) == 3 else ['violet', 'palegreen']
+    n, bs, _ = plt.hist(x, bins, color=cl, log=log_,
+                        histtype='bar', stacked=True,
+                        label=['replies', 'retweets', 'quotes'])
     plt.title(title, size=24)
     plt.xlabel(xlab, size=18)
     plt.ylabel(ylab, size=18)
@@ -103,10 +106,13 @@ def create_hist_scatter(x, bins, path: str, title='', xlab='', ylab='',
     
     if scatter_y is not None:
         ax2 = ax.twinx()
-        ax2.scatter(x, scatter_y, s=15, alpha=0.5, color='teal')
+        ax2.scatter(x[0], scatter_y[0], s=10, alpha=0.7, color='black', marker='x', label='reply followers')
+        ax2.scatter(x[1], scatter_y[1], s=10, alpha=0.5, color='red', marker='^', label='retweet followers')
+        ax2.scatter(x[2], scatter_y[2], s=10, alpha=0.3, color='seagreen', marker='*', label='quote followers')
         ax2.scatter([0],[root_flw], s=20, color='red')
         ax2.set_ylabel('follower count')
-    
+
+    plt.legend(fontsize=14)    
     plt.savefig(path) 
     plt.close('all')
     return n, bs

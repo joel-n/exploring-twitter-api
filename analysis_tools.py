@@ -828,11 +828,6 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagem
                                 title='Tweet Engagement', xlab='time (h)', ylab='counts',
                                 log_=False, t=t, y=fo_model_eng)#, y2=so_model_eng)
             
-                # sc_path = f'sampled_conversations_graphs/engagement_histograms/interactor_followers/{conv_id}_engag_ds{int(delta_sec)}_type3_flws.png'
-                #_, _ = create_hist_scatter(engagement_time, bins, path=sc_path,
-                #                           title='Engagement over time (replies and RTs)', xlab='time (h)', ylab='counts (replies and retweets)', log_=False,
-                #                           t=t+delta_h*first_peak, y=model_eng, scatter_y=followers, root_flw=root_followers)
-            
         except Exception as e:
             logging.warning(e)
             logging.info(f'optimization failed for conversation {conv_id}: replies:{n_replies}, reply_ratio:{reply_ratio}')
@@ -842,6 +837,92 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagem
     print('Plots: {}, missing data: {}, too few data points: {}, optimization failed: {}'.format(sufficient, missing_data, too_few, opt_failed))
     
     return
+
+def get_interaction_paths(conv_id: str) -> tuple[str, str, str]:
+    """Returns the paths to precomputed interaction times"""
+    reply_times_path   = f'interaction_times/reply_times/{conv_id}.txt'
+    retweet_times_path = f'interaction_times/retweet_times/{conv_id}.txt'
+    quote_times_path   = f'interaction_times/quote_times/{conv_id}.txt'
+    return reply_times_path, retweet_times_path, quote_times_path
+
+def get_follower_paths(conv_id: str) -> tuple[str, str, str]:
+    """Returns the paths to the number of followers for the interactions"""
+    reply_followers_path   = f'interaction_followers/reply_followers/{conv_id}_rep_flw.txt'
+    retweet_followers_path = f'interaction_followers/retweet_followers/{conv_id}_rt_flw.txt'
+    quote_followers_path   = f'interaction_followers/quote_followers/{conv_id}_q_flw.txt'
+    return reply_followers_path, retweet_followers_path, quote_followers_path
+
+
+def load_precomputed_enagegement(reply_times_path: str, retweet_times_path: str, quote_times_path: str,
+                                 reply_followers_path: str, retweet_followers_path: str, quote_followers_path: str) -> None:
+
+    reply_times = read_file(reply_times_path)
+    retweet_times = read_file(retweet_times_path)
+    quote_times = read_file(quote_times_path)
+
+    reply_followers = read_file(reply_followers_path)
+    retweet_followers = read_file(retweet_followers_path)
+    quote_followers = read_file(quote_followers_path)
+
+    return reply_times, retweet_times, quote_times, reply_followers, retweet_followers, quote_followers
+
+
+def plot_interaction_followers(conv_ids: list[str], delta_sec=3600) -> None:
+    sufficient, missing_data, too_few = 0, 0, 0
+    
+    # Iterate with generator from filter(all_files_exist, conv_ids)?
+    for conv_id in conv_ids:
+        rep_times_path, rt_times_path, q_times_path = get_interaction_paths(conv_id)
+        rep_flw_path, rt_flw_path, q_flw_path = get_follower_paths(conv_id)
+        
+        # Check that files exist. We assume that if one exists, so does all.
+        if not os.path.isfile(rep_times_path) or not os.path.isfile(q_times_path) or not os.path.isfile(rep_flw_path):
+            missing_data += 1
+            continue
+        elif not os.path.isfile(f'root_tweets/{conv_id}_root.jsonl'):
+            missing_data += 1
+            continue
+        
+        root = read_file(f'root_tweets/{conv_id}_root.jsonl')[0]
+        root_followers = root['author']['public_metrics']['followers_count']
+
+        reply_times, retweet_times, quote_times, reply_followers, retweet_followers, quote_followers = load_precomputed_enagegement(rep_times_path, rt_times_path,
+                                                                                                                                    q_times_path, rep_flw_path,
+                                                                                                                                    rt_flw_path, q_flw_path)
+        #quote_times, quote_followers = [], []
+        #for q in file_generator(f'quotes/{conv_id}_quotes.jsonl'):
+        #    quote_times.append(compute_relative_time(root['created_at'], q['created_at']))
+        #    quote_followers.append(q['author']['public_metrics']['followers_count'])
+        
+        n_replies, n_retweets, n_quotes = len(reply_times), len(retweet_times), len(quote_times)
+        tot_eng = n_replies + n_retweets + n_quotes
+        assert tot_eng == len(reply_followers) + len(retweet_followers) + len(quote_followers)
+
+        n_api_retweets = root['public_metrics']['retweet_count']
+        # DECISION: Ignore the conversations that have fewer than 50 replies/retweets
+        # or if we are missing more than 50% of the retweets
+        if (tot_eng < 50) or (n_retweets <= 0.5*n_api_retweets):
+            too_few += 1
+            continue
+        else:
+            sufficient += 1
+        
+        # reply_ratio = n_replies / tot_eng
+
+        ## Peak detection to find the intervals in which to check for users with many followers.
+
+        ## Check for 
+        
+        # Bin and estimate engagement curve (time series with increments of delta_t) 
+        max_rep, max_rt, max_q = max(reply_times, default=0), max(retweet_times, default=0), max(quote_times, default=0)
+        maximum_time = max(max_rep, max(max_rt, max_q))
+        bins, delta_h = create_bins(delta_sec, maximum_time, padding=True)
+        hist_folder = 'sampled_conversations_graphs/engagement_histograms/interactor_followers'
+        _, _ = create_hist_scatter([reply_times, retweet_times, quote_times], bins,
+                                    path=f'{hist_folder}/{conv_id}_followers.png',
+                                    title='Tweet Engagement', xlab='time (h)', ylab='counts',
+                                    scatter_y=[reply_followers, retweet_followers, quote_followers], root_flw=root_followers)
+    print('sufficient: {}, missing data: {}, too few data point: {}'.format(sufficient, missing_data, too_few))
 
 
 def undirected_message_tree(conv_id: str) -> nx.Graph:
