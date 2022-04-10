@@ -218,7 +218,7 @@ class miner():
             else:
                 self.logger.info(f'Tweet {conv_id} has no referenced tweets.')
                             
-            if os.path.isfile(f'sampled_conversations/{conv_id}_conversation-tweets.jsonl'):
+            if os.path.isfile(f'sampled_conversations/{conv_id}_conversation-tweets.jsonl') or os.path.isfile(f'interaction_times/reply_times/{conv_id}.txt'):
                 self.logger.info(f'Conversation {conv_id} already retrieved.')
                 continue
                 
@@ -235,7 +235,7 @@ class miner():
             conv_query = f'conversation_id:{conv_id}'
             conv_tweets = self.full_archive_search(query_=conv_query, max_results_pp=100,
                                                     expansions_='author_id,in_reply_to_user_id,referenced_tweets.id,referenced_tweets.id.author_id,entities.mentions.username',
-                                                    tweet_fields_='attachments,author_id,context_annotations,conversation_id,created_at,entities,id,public_metrics,text,referenced_tweets,reply_settings',
+                                                    tweet_fields_='attachments,author_id,context_annotations,conversation_id,created_at,entities,id,public_metrics,text,referenced_tweets,reply_settings,source',
                                                     user_fields_='created_at,entities,id,name,protected,public_metrics,url,username',
                                                     media_fields_='type', poll_fields_='id', place_fields_='id')
 
@@ -303,6 +303,11 @@ class miner():
         return roots, retrieved_conv_ids
 
 
+    def root_tweet_missing(self, conv_id):
+        """Returns True if root tweet with ID == conv_id is missing."""
+        return not os.path.isfile(f'root_tweets/{conv_id}_root.jsonl')
+
+
     def get_all_retweets(self, conv_ids: list[str]) -> None:
             """Get retweets of conversation roots and stores them in a .jsonl-file.
             Will ignore the conversation IDs that already is associated with a 
@@ -331,7 +336,7 @@ class miner():
             t1 = pytime.time()
             
             for i, root in enumerate(roots):
-                if os.path.isfile(f'retweets/{retrieved_conv_ids[i]}.jsonl'):
+                if os.path.isfile(f'retweets/{retrieved_conv_ids[i]}.jsonl') or os.path.isfile(f'interaction_times/retweet_times/{retrieved_conv_ids[i]}.txt'):
                     roots_skipped += 1
                     self.logger.info(f'Skipped retweets of conversation {retrieved_conv_ids[i]} as they were already retrieved.')
                     continue
@@ -351,49 +356,60 @@ class miner():
                     no_text_roots += 1
                     continue
                 
-                # Did not work
-                #if root_text[-1] == ' ':
-                #    root_text = root_text[:-1]
-                
-                #root_text = root_text.split('"')[0]
-                #if len(root_text) > 15:
-                #    root_text = root_text[:15]
-                
-                # Remove special unicode
-                #root_text = remove_special(root_text)
-                #print(f'root_text after removing unicode surrogates:', root_text)
-                
                 root_author = root['id']
                 print(retrieved_conv_ids[i], ',', root['n_retweets'], 'retweets')
                 print(root_text)
-                
+                       
                 # TODO: Modify the expansion fields as well? See twitter or Postman WS for allowed values
                 # TODO: Use try catch to avoid breaking HTTPerrors?
-                #results = recent_search(query_=f'retweets_of:{root_author} "{root_text}"',
-                #                        max_results_pp=100, tweet_fields_='id,author_id,referenced_tweets,created_at',
-                #                        user_fields_='id')
-                results = self.full_archive_search(query_=f'retweets_of:{root_author} "{root_text}"', max_results_pp=500,
-                                            expansions_='author_id,in_reply_to_user_id,referenced_tweets.id,referenced_tweets.id.author_id',
-                                            tweet_fields_='id,author_id,referenced_tweets,created_at', user_fields_='id,public_metrics',
-                                            media_fields_='type', poll_fields_='id', place_fields_='id')
+                max_results_pp = 500
+                #results = self.full_archive_search(query_=f'retweets_of:{root_author} "{root_text}"', max_results_pp=max_results_pp,
+                #                            expansions_='author_id,in_reply_to_user_id,referenced_tweets.id,referenced_tweets.id.author_id',
+                #                            tweet_fields_='id,author_id,referenced_tweets,created_at', user_fields_='id,public_metrics',
+                #                            media_fields_='type', poll_fields_='id', place_fields_='id')
+
+                # TODO: query also on time if we search for tweets that yield too many results
+                search_results = self.client.search_all(query=f'retweets_of:{root_author} "{root_text}"', max_results=max_results_pp,
+                                                        expansions='author_id,in_reply_to_user_id,referenced_tweets.id,referenced_tweets.id.author_id',
+                                                        tweet_fields='id,author_id,referenced_tweets,created_at', user_fields='id,public_metrics',
+                                                        media_fields='type', poll_fields='id', place_fields='id')
                 
-                # Debug prints
-                #NRT = root['n_retweets']
-                #print(f'full archive search yielded {len(results)} results; the root has {NRT} retweets')
-                
-                retweets = []
-                for retweet in results:
-                    for t in retweet['referenced_tweets']:
-                        if t['id'] == retrieved_conv_ids[i]:
-                            # Append to file here? How many results do we expect?
-                            retweets.append(retweet)
-                            break
-                            
+                num_rts = root['n_retweets']
+                elbow_space = 2 if num_rts > 10000 else 4
+                n_expected_pages = int(elbow_space * (2 + num_rts/max_results_pp)) # allow double the expected pages
+
+                #for retweet in results:
+                #    for t in retweet['referenced_tweets']:
+                #        if t['id'] == retrieved_conv_ids[i]:
+                #            # Append to file here? How many results do we expect?
+                #            retweets.append(retweet)
+                #            break
+
+                n_pages, tot_results = 0, 0
+                api_mismatch = False
+                for page in search_results:
+                    retweets = []
+                    result = expansions.flatten(page)
+                    for retweet in result:
+                        for t in retweet['referenced_tweets']:
+                            if t['id'] == retrieved_conv_ids[i]:
+                                retweets.append(retweet)
+                    tot_results += len(retweets)
+                    append_objs_to_file(f'retweets/{retrieved_conv_ids[i]}.jsonl', retweets)
+                    n_pages += 1
+                    if n_pages > n_expected_pages:
+                        api_mismatch = True
+                        break
+
                 # TODO: warn if there are many retweets according to root, but none were retrieved in the query
                 # Add the expected number of RTs (root['n_retweets']) to the log file
-                num_rts = root['n_retweets']
-                append_objs_to_file(f'retweets/{retrieved_conv_ids[i]}.jsonl', retweets)
-                self.logger.info(f'Retrieved {len(retweets)} (of {num_rts}) retweets to conversation {retrieved_conv_ids[i]}.')
+                if api_mismatch:
+                    self.logger.info(f'Retweets to conversation {retrieved_conv_ids[i]} resulted in too many matches and was aborted after {n_pages} pages of results.')
+                    self.logger.info(f'Expected {int(1 + num_rts/max_results_pp)} pages for {num_rts} retweets. Retrieved {tot_results} retweets before aborting.')
+                    continue
+
+                # already appended in loop: append_objs_to_file(f'retweets/{retrieved_conv_ids[i]}.jsonl', retweets)
+                self.logger.info(f'Retrieved {tot_results} (of {num_rts}) retweets to conversation {retrieved_conv_ids[i]}.')
                 
             t2 = pytime.time() - t1
             self.logger.info(f'Retweets retrieval took {t2} seconds.')
@@ -417,14 +433,24 @@ class miner():
         """
         n_conv = len(conv_ids)
         print('Retrieving quotes for {} tweets.\
-        With 1200 queries per hour this should take {:.3f} minutes ({:.3f} hours)'.format(n_conv, n_conv/30, n_conv/1800))
+        With 300 queries per hour this should take {:.3f} minutes ({:.3f} hours)'.format(n_conv, n_conv/5, n_conv/300))
         t1 = pytime.time()
         tot_quotes_retrieved = 0
         
         for conv_id in conv_ids:
+            quote_path = f'quotes/{conv_id}_quotes.jsonl'
                         
-            if os.path.isfile(f'quotes/{conv_id}_quotes.jsonl'):
+            if os.path.isfile(quote_path) or os.path.isfile(f'interaction_times/quote_times/{conv_id}.txt'):
                 self.logger.info(f'Quotes for {conv_id} already retrieved.')
+                continue
+            elif not self.get_single_root(conv_id):
+                self.logger.info(f'Cannot get root for tweet {conv_id}.')
+                continue
+
+            root = read_file(f'root_tweets/{conv_id}_root.jsonl')[0]
+            if root['public_metrics']['quote_count'] == 0:
+                append_objs_to_file(quote_path, [])
+                self.logger.info(f'Tweet {conv_id} has no quote tweets.')
                 continue
             
             exp = 'author_id,in_reply_to_user_id,referenced_tweets.id,referenced_tweets.id.author_id,entities.mentions.username'
@@ -432,19 +458,19 @@ class miner():
             usr_fields = 'created_at,entities,id,name,protected,public_metrics,url,username'
             quote_results = self.client.quotes(conv_id, expansions=exp, tweet_fields=tw_fields, user_fields=usr_fields, max_results=100)
 
-            filename = f'quotes/{conv_id}_quotes.jsonl'
+            quote_path = f'quotes/{conv_id}_quotes.jsonl'
             
             n_results = 0
             for page in quote_results:
                 result = expansions.flatten(page)
-                append_objs_to_file(filename, result)
+                append_objs_to_file(quote_path, result)
                 n_results += len(result)
             
             self.logger.info(f'Quote query on {conv_id} resulted in a total of {n_results} tweets.')
             if n_results > 0:
                 tot_quotes_retrieved += 1
             else:
-                append_objs_to_file(filename, [])
+                append_objs_to_file(quote_path, [])
         
         t2 = pytime.time() - t1
         self.logger.info(f'Conversation retrieval took {t2} seconds. Out of {n_conv} conversations, {tot_quotes_retrieved} were quoted.')
