@@ -2,15 +2,15 @@ import os
 import logging
 import datetime
 #import numpy as np
-#import pandas as pd
 import networkx as nx
+#import matplotlib.pyplot as plt
 from file_manip import *
 from plot_tools import *
-from scipy.optimize import curve_fit
-from sklearn.linear_model import LinearRegression
+from curve_fitting import *
+from scipy.stats import wilcoxon, spearmanr
 
 
-def get_saved_conversation_ids(lower_bound: int, upper_bound: int, folder='sampled_conversations') -> list:
+def get_saved_conversation_ids(lower_bound: int, upper_bound: int, folder='sampled_conversations', delimiter='_') -> list:
     """Returns a list of conversation ids between a given
     lower and upper bound from the folder of saved conversations.
     
@@ -27,7 +27,7 @@ def get_saved_conversation_ids(lower_bound: int, upper_bound: int, folder='sampl
     conv_ids = []
     
     for conv_file_name in file_paths:
-        conv_id = conv_file_name.split('_')[0]
+        conv_id = conv_file_name.split(delimiter)[0]
         if int(conv_id) >= lower_bound and int(conv_id) <= upper_bound:
             conv_ids.append(conv_id)
 
@@ -73,291 +73,6 @@ def auto_correlate(x, symmetric=True):
     else:
         ac = ac/ac[len(x)-1]
     return ac
-
-
-def mean_square_error_fo(bin_values, lambda_: float, beta_: float) -> float:
-    """Computes the mean square error of a first order
-    linear model with parameters beta_ and lambda_, with
-    data discretized in steps of 1 unit of time.
-    
-    Args:
-        - bin_values: bin values of the engagement histogram
-        - beta_: parameter modelling the initial response to
-        the tweet. Should be positive
-        - lambda_: decay constant which should take values
-        less than 1
-        
-    Returns:
-        - MSE: the mean square error
-    """
-    x_hat = beta_
-    MSE = 0
-    for x in bin_values:
-        MSE += (x-x_hat)**2
-        x_hat *= (1-lambda_)
-    MSE = MSE / len(bin_values)
-    return MSE
-
-
-def eval_error(time, model_engagement, true_engagement) -> tuple[float, float]:
-    """Computes the mean square error, and the ratio between the sum of
-    squared residuals and the sum of the squared signal in continuous time
-    
-    Args:
-        - time: time vector for the observations
-        - model_engagement: predicted engagement of fitted model
-        - true_engagement: engagement at times specified in time vector
-        
-    Returns:
-        - MSE: mean square error
-        - RSS_frac: ratio of residuals squared and sum_signal_squared
-        - sum_signal_squared: sum of squared signal samples
-    """
-    res = model_engagement - true_engagement
-    sq_residual = np.square(res)
-    sq_signal = np.square(true_engagement)
-    
-    MSE = np.mean(sq_residual)
-    sum_signal_squared = np.sum(sq_signal)
-    RSS_frac = np.sum(sq_residual)/sum_signal_squared
-    
-    #plt.hist(res, bins=200)
-    #plt.show()
-    
-    return MSE, RSS_frac, sum_signal_squared
-
-
-def exponential(x_, lambda_, beta_):
-    """Exponential decay with parameters lambda and beta."""
-    return beta_*np.exp(-lambda_*x_)
-
-
-def log_exponential(x_, lambda_, beta_):
-    return np.log(exponential(x_, lambda_, beta_))
-
-
-def log_exp(x_, lambda_, log_beta_):
-    """Logarithm of exponential decay with parameters lambda and beta."""
-    return log_beta_ - lambda_*x_
-
-
-def power(x_, lambda_, beta_):
-    """Power law."""
-    return beta_*(np.power(np.array(x_, dtype=float), -lambda_))
-
-
-def estimate_lin_decay(time, engagement):
-    t, log_eng = [], []
-    for i, e in enumerate(engagement):
-        if e != 0:
-            log_eng.append(np.log(e))
-            t.append(time[i])
-    
-    time = np.array(t)
-    log_eng = np.array(log_eng)
-    
-    lin_model = LinearRegression(fit_intercept=True)
-    
-    #log_eng = np.log(np.array(engagement)+1)
-    lin_model.fit(time.reshape(-1, 1), log_eng.reshape(-1, 1))
-    
-    lambda_ = -lin_model.coef_[0][0]
-    beta_ = np.exp(lin_model.intercept_[0])
-    
-    #print("coefs:", lambda_, beta_)
-    
-    return lambda_, beta_
-    
-
-def estimate_decay_parameters(time, engagement, loss_='linear', f_scale_=1.0):
-    """Returns an estimate of the parameters of the
-    exponential decay function of engagement over time.
-    
-    Args:
-        - time: time vector
-        - engagement: engagement at times specified
-        in time vector
-        
-    Returns:
-        - popt: optimal parameters
-    """
-    # lower and upper bounds on lambda and beta:
-    # 1e-4 <= lambda <= 1e3, and 1 <= beta <= 1e9.
-    bounds_ = ([1e-4, 1], [1e3, 1e9])
-    init = [1, 1]
-    
-    # Optimization: Trust Region Reflective algorithm 'trf'
-    # Levenberg-Marquardt ('lm') does not handle parameter bounds
-    method_ = 'trf'
-    
-    # Linear fit (alt. L1 fit)
-    popt, _ = curve_fit(exponential, time, engagement, p0=init,
-                        bounds=bounds_, method=method_, loss=loss_, f_scale=f_scale_)
-    
-    # Log fit
-    #engagement = np.array(engagement)
-    #log_eng = np.log(engagement+1e-3)
-    #bounds_ = ([1e-4, 0], [1e3, 9]) # 0 <= log(beta) <= 9
-    #popt, _ = curve_fit(log_exponential, time, engagement, p0=init,
-    #                    bounds=bounds_, method=method_)
-    
-    return popt
-
-
-def delayed_biexponential(x_, alpha, beta, gamma, eta, sigma, delay):
-    """Solution to second order system. Assumes that the time bins
-    are spaced 1 hour apart (tau_d is the delay given in hours).
-    
-    Note that gamma and alpha are positive, whereas they are negative
-    in the original equation system.
-    """
-    #tau_dn = int(tau_d*100)
-    #u_delay = np.concatenate((np.zeros(tau_dn), np.ones(len(x_)-tau_dn)))
-    #return eta*np.exp(-alpha*x_) + (sigma+(beta/(gamma-alpha)))*np.exp(-alpha*(x_-tau_d))*u_delay - (beta/(gamma-alpha))*np.exp(-gamma*(x_-tau_d))*u_delay 
-    delay=int(delay)
-    delayed = (sigma+(beta/(gamma-alpha)))*np.exp(-alpha*(x_-delay)) - (beta/(gamma-alpha))*np.exp(-gamma*(x_-delay))
-    delayed[:delay] = 0
-    return eta*np.exp(-alpha*x_) + delayed
-
-
-def biexponential(x_, alpha, beta, gamma, rho):
-    """Solution to system
-    dx1/dt = alpha*x1(t) + beta*x2(t)
-    dx2/dt = gamma*x2(t) + rho*d(t)
-    """
-    return np.exp(-alpha*(x_))*rho*beta/(gamma-alpha) + np.exp(-gamma*(x_))*rho*(1-(beta/(gamma-alpha)))
-
-
-def u_biexponential(x_, alpha, beta, gamma, rho):
-    """Solution to system
-    dx1/dt = alpha*x1(t) + beta*x2(t)
-    dx2/dt = gamma*x2(t) + rho*d(t)
-    """
-    if np.abs(gamma - alpha) < 1e-10:
-        return np.exp(-alpha*(x_))*rho
-    else:
-        return np.exp(-alpha*(x_))*rho*beta/(gamma-alpha) + np.exp(-gamma*(x_))*rho*(1-(beta/(gamma-alpha)))
-
-
-def estimate_unconstr_biexp(time, engagement):
-    
-    def biexponential_unconstr_opt(x_, alpha, beta, gamma, rho):
-        """Solution to system
-        dx1/dt = alpha*x1(t) + beta*x2(t)
-        dx2/dt = gamma*x2(t) + rho*d(t)
-        """
-        if np.abs(gamma - alpha) < 1e-10:
-            return np.exp(-alpha*(x_))*rho
-        else:
-            return np.exp(-alpha*(x_))*rho*beta/(gamma-alpha) + np.exp(-gamma*(x_))*rho*(1-(beta/(gamma-alpha)))
-    
-    method_ = 'lm'
-    init = [1, 1, 1, 1]
-    popt, _ = curve_fit(biexponential_unconstr_opt, time, engagement, p0=init, method=method_)
-    a, b, g, r = popt[0], popt[1], popt[2], popt[3]
-    return a, b, g, r
-
-
-def estimate_biexponential(time, engagement, loss_='linear'):
-    
-    def biexponential_opt(x_, alpha, beta, d_gamma, rho):
-        """Solution to system
-        dx1/dt = alpha*x1(t) + beta*x2(t)
-        dx2/dt = gamma*x2(t) + rho*d(t)
-        """
-        gamma = alpha + d_gamma
-        return np.exp(-alpha*(x_))*rho*beta/(gamma-alpha) + np.exp(-gamma*(x_))*rho*(1-(beta/(gamma-alpha)))
-    
-    method_ = 'trf'
-            # alpha, beta, d_gamma, rho
-    bounds_ = ([0,    0,    1e-9, 1e-9],
-               [1e9,  1e9,  1e9,  1e9])
-    init = [1e-1, 1, 1e-1, 1]
-    
-    """Previous bounds:
-    bounds_ = ([1e-5, 1e-2, 1e-5, 1e-3],
-               [1e3,  1e9,  1e3,  1e9])
-    init = [1e-1, 1, 1e-1, 1]
-    """
-    
-    popt, _ = curve_fit(biexponential_opt, time, engagement,
-                        p0=init, bounds=bounds_, method=method_, loss=loss_)
-    a, b, d_g, r = popt[0], popt[1], popt[2], popt[3]
-    g = a + d_g
-    return a, b, g, r
-
-
-def estimate_second_order(time, engagement, delay, loss_='linear'):
-    """Fit a second order model of type
-    dx1/dt = ax1 + bx2 + nd(t) + sd(t-td)
-    dx2/dt = gx2 +     + rd(t-td)
-    Since r and b are coupled we set r=1
-    
-    Args:
-        - time: time vector
-        - engagement: engagement at times specified
-        in time vector
-        
-    Returns:
-        - a, b, g, n, s: model parameters
-    """
-    
-    def biexponential_free_delay(x_, d_alpha, beta, gamma, eta, sigma, delay):
-        """Solution to second order system. Assumes that the time bins
-        are spaced 1 hour apart (tau_d is the delay given in hours).
-
-        Note that gamma and alpha are positive, whereas they are negative
-        in the original equation system.
-        """
-        #tau_dn = int(tau_d*100)
-        #u_delay = np.concatenate((np.zeros(tau_dn), np.ones(len(x_)-tau_dn)))
-        #return eta*np.exp(-alpha*x_) + (sigma+(beta/(gamma-alpha)))*np.exp(-alpha*(x_-tau_d))*u_delay - (beta/(gamma-alpha))*np.exp(-gamma*(x_-tau_d))*u_delay 
-        delay_n=int(delay)
-        alpha = gamma + d_alpha
-        delayed = (sigma+(beta/(gamma-alpha)))*np.exp(-alpha*(x_-delay)) - (beta/(gamma-alpha))*np.exp(-gamma*(x_-delay))
-        delayed[:delay_n] = 0
-        return eta*np.exp(-alpha*x_) + delayed
-    
-    def biexponential_fixed_delay(x_, d_alpha, beta, gamma, eta, sigma):
-        """Solution to second order system. Assumes that the time bins
-        are spaced 1 hour apart (delay is given by encapsulating function hours).
-
-        Note that gamma and alpha are positive, whereas they are negative
-        in the original equation system.
-        """
-        #tau_dn = int(tau_d*100)
-        #u_delay = np.concatenate((np.zeros(tau_dn), np.ones(len(x_)-tau_dn)))
-        alpha = gamma + d_alpha
-        delayed = (sigma+(beta/(gamma-alpha)))*np.exp(-alpha*(x_-delay)) - (beta/(gamma-alpha))*np.exp(-gamma*(x_-delay))
-        delayed[:delay] = 0
-        return eta*np.exp(-alpha*x_) + delayed
-        # return eta*np.exp(-alpha*x_) + (sigma+(beta/(gamma-alpha)))*np.exp(-alpha*(x_-tau_d))*u_delay - (beta/(gamma-alpha))*np.exp(-gamma*(x_-tau_d))*u_delay 
-
-    method_ = 'trf'
-    if delay != 0:
-        bounds_ = ([1e-5, 1e-2, 1e-5, 1,   1e-5],
-                   [1e3, 1e9,   1e3,  1e9, 1e6])
-        init = [1e-1, 1, 1e-1, 2, 1]
-        popt, _ = curve_fit(biexponential_fixed_delay, time, engagement,
-                            p0=init, bounds=bounds_, method=method_, loss=loss_)
-        d_a, b, g, n, s, td = popt[0], popt[1], popt[2], popt[3], popt[4], 0
-        
-    else:
-        tau_max = int(time[-1]-time[0])
-        # instead of fitting gamma, use auxillary parameter c=alpha-gamma, which is
-        # always less than 0 (if alpha and gamma are defined negative) and describes the
-        # discrepancy between the types of decay. Using gamma < alpha < 0 will give an error.
-        bounds_ = ([1e-5, 1e-2, 1e-5, 1, 1e-5, 0],
-                   [1e3, 1e9,   1e3,  1e9, 1e6, tau_max])
-        init = [1e-1, 1, 1e-1, 2, 1, int(0.5*tau_max)]
-
-        # Linear fit (alt. L1 fit with 'soft_l1')
-        popt, _ = curve_fit(biexponential_free_delay, time, engagement,
-                            p0=init, bounds=bounds_, method=method_, loss=loss_)
-        d_a, b, g, n, s, td = popt[0], popt[1], popt[2], popt[3], popt[4], popt[5]
-    
-    a = g + d_a
-    return a, b, g, n, s, td
 
 
 def peak_detection(e, lag, threshold, influence):
@@ -420,7 +135,7 @@ def filter_peaks(result, y, peak_threshold: float, adj_dist=1):
     
     Args:
         - result: the result dictionary of the peak detection algorithm
-        - y: engagement histogram values
+        - y: engagement histogram values (including zero-bins for lag)
         - peak_threshold: fraction of global maximum a peak must attain
         in order not to be filtered out
         - adj_dist: max distance between adjacent peaks; these will be
@@ -431,7 +146,7 @@ def filter_peaks(result, y, peak_threshold: float, adj_dist=1):
         - peaks_y: y-coordinate for the relevant peaks
     """
     
-    xx, yy= [], []
+    xx, yy = [], []
     
     assert peak_threshold >= 0 and peak_threshold <= 1
     glob_max = max(y)
@@ -450,7 +165,9 @@ def filter_peaks(result, y, peak_threshold: float, adj_dist=1):
 
     # Filter out adjacent peaks
     for i in range(1, len(xx)):
+
         if xx[i] > prev_x + adj_dist:
+            # New segment
             peaks_x.append(curr_max)
             peaks_y.append(curr_max_y)
             
@@ -459,7 +176,9 @@ def filter_peaks(result, y, peak_threshold: float, adj_dist=1):
             curr_max = xx[i]
             curr_max_y = yy[i]
         else:
+            # Append current segment
             if curr_max_y < yy[i]:
+                # Replace y_max
                 curr_max = xx[i]
                 curr_max_y = yy[i]
             segment_x.append(xx[i])
@@ -483,7 +202,7 @@ def plot_peak_detection(y, result, conv_id, plot=True):
     The result data is filtered before plotting.
     
     Args:
-        - y: the engagement histogram values
+        - y: the engagement histogram values (including zero-bins for lag)
         - result: result dictionary of the peak detection algorithm
         - conv_id: conversation id
         
@@ -493,13 +212,11 @@ def plot_peak_detection(y, result, conv_id, plot=True):
         indicates a single peak (0), double peak (1), bump (2), or
         multiple peaks (3).
         - first_peak: bin number of the first peak (i.e., delay).
-        Chosen as the largest of the first two peaks, or -1 in
+        NOTE: Chosen as the largest of the first two peaks, or -1 in
         the odd case that there is no peak.
     """
     
     peaks_x, peaks_y = filter_peaks(result, y, peak_threshold=0.15, adj_dist=2)
-    
-    ### TODO: find also second peak, if it is relevant!
     
     # DECISION: We use the heuristic to pick the largest of the two first peaks
     type_ = 0
@@ -536,29 +253,40 @@ def plot_peak_detection(y, result, conv_id, plot=True):
     
     
     if plot:
-        plt.figure(figsize=(8,8))
-        #plt.subplot(211)
-        plt.plot(np.arange(1, len(y)+1), y, color='navy', lw=2)
+        np_peaks_x, np_peaks_y = np.array(peaks_x), np.array(peaks_y)
+        for i in [len(y)-2]:
+            f,ax = plt.subplots(figsize=(8,8))
+            #plt.subplot(211)
+            plt.plot(np.arange(-10, len(y)-10), y, color='navy', lw=3, zorder=0)
 
-        plt.plot(np.arange(1, len(y)+1),
-                   result["avgFilter"], '--', color='gold', lw=1)
+            plt.plot(np.arange(-10, len(y[:i+1])-10),
+                    result["avgFilter"][:i+1], '--', color='red', lw=5, zorder=2)
 
-        plt.plot(peaks_x, peaks_y, 'o', color='red')
+            plt.scatter(np_peaks_x[np_peaks_x<i]-11, np_peaks_y[np_peaks_x<i], s=90, color='crimson', label='detected peaks', zorder=4)
 
-        plt.plot(np.arange(1, len(y)+1),
-                   result["avgFilter"] + result['threshold'] * result["stdFilter"], color="sienna", lw=0.8)
+            plt.fill_between(x=np.arange(-10, len(y[:i+1])-10),
+                            y1=result["avgFilter"][:i+1] + result['threshold'] * result["stdFilter"][:i+1],
+                            y2=result["avgFilter"][:i+1] - result['threshold'] * result["stdFilter"][:i+1],
+                            lw=2, alpha=0.3, color="seagreen", zorder=1)
 
-        plt.plot(np.arange(1, len(y)+1),
-                   result["avgFilter"] - result['threshold'] * result["stdFilter"], color="sienna", lw=0.8)
-
-        suppressed = [i for i,r in enumerate(result['signals']) if r > 0]
-        supp_y = -1*np.ones(len(suppressed))
-        plt.plot(suppressed, supp_y, 'o', color='salmon')
-        plt.savefig(f'sampled_conversations_graphs/peak_detection/{type_}/{conv_id}_peaks.png')
-        plt.close('all')
-        #plt.show()
+            suppressed = np.array([i-10 for i,r in enumerate(result['signals'][:i+1]) if r > 0])
+            supp_y = -1*np.ones(len(suppressed))
+            plt.scatter(suppressed[suppressed < i], supp_y[suppressed < i], s=70, edgecolor='black', color='salmon', label='ignored peaks', zorder=5)
+            plt.xlim(-10,70)
+            plt.ylim(-50, max(peaks_y)+50)
+            ax.tick_params(labelsize=30, direction="in", which='both')
+            plt.xlabel('time (h)', fontsize=30)
+            plt.ylabel('interactions', fontsize=30)
+            if i > 0:
+                plt.legend(loc='upper right', fontsize=26)
+            plt.tight_layout()
+            plt.savefig(f'sampled_conversations_graphs/peak_detection/peaks{i}.svg')
+            plt.close('all')
+            #plt.show()
     
-    return type_, first_peak, second_peak
+    peaks_x, peaks_y = np.array(peaks_x) - result['lag'] - 1, np.array(peaks_y)
+
+    return type_, first_peak, second_peak, peaks_x, peaks_y
 
 
 def get_file_paths(conv_id: str) -> tuple[str, str, str]:
@@ -611,7 +339,7 @@ def create_bins(delta_sec, max_time, padding=True):
     return bins, delta_h
 
 
-def perform_peak_detection(engagement_hist_values):
+def perform_peak_detection(engagement_hist_values, plot=False):
     """Performs peak detection and returns the type of the
     conversation, and the locations of the first and second
     peaks.
@@ -624,15 +352,17 @@ def perform_peak_detection(engagement_hist_values):
         details
         - first_peak: location of the first peak (bin number)
         - second_peak: location of the second peak (bin number)
+        - peaks_x: peak time values
+        - peaks_y: peak heights
     """
     
     lag_ = 10
     rd = np.zeros(lag_)
     time_series = np.concatenate((rd,engagement_hist_values))
     result = peak_detection(time_series, lag=lag_, threshold=1.5, influence=0.8)
-    type_, first_peak, second_peak = plot_peak_detection(time_series, result, conv_id='', plot=False)
+    type_, first_peak, second_peak, peaks_x, peaks_y = plot_peak_detection(time_series, result, conv_id='', plot=plot)
 
-    return type_, first_peak, second_peak
+    return type_, first_peak, second_peak, peaks_x, peaks_y
 
 
 def load_engagement(root_t, conversation_path: str, retweet_path: str, quote_path=None):
@@ -702,7 +432,7 @@ def fit_first_order(time, engagement_hist, delta_h, peak_detection=True):
     
     # Peak detection for the first order model
     if peak_detection:
-        type_, first_peak, second_peak = perform_peak_detection(engagement_hist)
+        type_, first_peak, second_peak, _, _ = perform_peak_detection(engagement_hist)
     else:
         type_, first_peak, second_peak = 'None', 0, -1
 
@@ -723,7 +453,7 @@ def fit_first_order(time, engagement_hist, delta_h, peak_detection=True):
     return lambda_, beta_, model_eng, type_, first_peak, second_peak
 
 
-def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagement=False) -> None:
+def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagement=False, result_file_mod='') -> None:
     """Retrieves the engagement times of retweets and replies.
     Only considers conversations where root, conversation, and
     retweet files exist.
@@ -740,10 +470,11 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagem
     
     # Iterate with generator from filter(all_files_exist, conv_ids)?
     for conv_id in conv_ids:
-        root_path, conv_path, retw_path = get_file_paths(conv_id)
+        reply_times_path, retweet_times_path, quote_times_path = get_interaction_paths(conv_id)
+        root_path = f'root_tweets/{conv_id}_root.jsonl'
         
         # Check that root, conversation and retweet files exist.
-        if os.path.isfile(root_path) and os.path.isfile(conv_path) and os.path.isfile(retw_path):
+        if os.path.isfile(root_path) and os.path.isfile(reply_times_path) and os.path.isfile(quote_times_path):
             root = read_file(root_path)[0]
         else:
             missing_data += 1
@@ -754,16 +485,14 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagem
             missing_data += 1
             continue
         """
-        engagement_time, n_replies, followers, n_rep_users = load_engagement(root['created_at'], conv_path, retw_path)
-        tot_eng = len(engagement_time)
-        
-        # For reply and retweet separation
-        #if n_replies < 30 or (tot_eng-n_replies)<30:
-        #    continue
-        
+
+        reply_times, retweet_times, quote_times = load_precomputed_engagement_times(conv_id)
+        n_replies, n_retweets, n_quotes = len(reply_times), len(retweet_times), len(quote_times)
+        tot_eng = n_replies + n_retweets + n_quotes
+
         n_api_retweets = root['public_metrics']['retweet_count']
         # DECISION: Ignore the conversations that have fewer than 50 replies/retweets
-        if (tot_eng < 50) or ((tot_eng-n_replies) <= 1e-5*n_api_retweets):
+        if (tot_eng < 50) or (n_retweets <= 0.5*n_api_retweets):
             too_few += 1
             continue
         else:
@@ -771,28 +500,25 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagem
         
         reply_ratio = n_replies / tot_eng
         
-        # Bin and estimate engagement curve (time series with increments of delta_t) 
+        engagement_time = np.concatenate((np.zeros(1), reply_times, retweet_times, quote_times))
         bins, delta_h = create_bins(delta_sec, np.max(engagement_time), padding=True)
         n, _ = np.histogram(engagement_time, bins)
         
-        # Retweet and reply histograms
-        #reply_hist, _ = np.histogram(engagement_time[:n_replies], bins)
-        #retw_hist, _ = np.histogram(engagement_time[n_replies:], bins)
+        #t = (bins[1:] + bins[:-1])/2 # Time vector (center of bins, can also use bins[:-1])        
+        t = bins[:-1]
 
-        t = (bins[1:] + bins[:-1])/2 # Time vector (center of bins, can also use bins[:-1])        
-        
         try:
             
             lambda_, beta_, fo_model_eng, type_, first_peak, second_peak = fit_first_order(t, n, delta_h, peak_detection=False)
             #lambda_, beta_, type_, first_peak, second_peak = -1, -1, 'None', -1, -1 # if 1st order model is skipped
             #fo_MSE, fo_RSS_frac = -1, -1
-            
+
             # Fit the second order model
-            # a, b, g, rho = estimate_biexponential(time=t, engagement=n, loss_='linear')
-            #so_model_eng = biexponential(t, alpha=a, beta=b, gamma=g, rho=rho)
+            a, b, g, rho = estimate_biexponential(time=t, engagement=n, loss_='linear')
+            so_model_eng = biexponential(t, alpha=a, beta=b, gamma=g, rho=rho)
             #a, b, g, rho = estimate_unconstr_biexp(time=t, engagement=n)
             #so_model_eng = u_biexponential(t, alpha=a, beta=b, gamma=g, rho=rho)
-            
+
             # Reply and retweet separation
             #a, b, g, rho = estimate_biexponential(time=t, engagement=reply_hist, loss_='linear')
             #so_model_eng = biexponential(t, alpha=a, beta=b, gamma=g, rho=rho)
@@ -801,32 +527,29 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagem
                 
             # Evaluate model errors
             fo_MSE, fo_RSS_frac, sum_signal_squared = eval_error(t, fo_model_eng, n)
-            #so_MSE, so_RSS_frac, sum_signal_squared = eval_error(t, so_model_eng, n)
+            so_MSE, so_RSS_frac, sum_signal_squared = eval_error(t, so_model_eng, n)
             #so_MSE2, so_RSS_frac2, _ = eval_error(t, so_model_eng2, n)
             
             root_followers = root['author']['public_metrics']['followers_count']
             n_api_replies = root['public_metrics']['reply_count']
             n_api_quotes = root['public_metrics']['quote_count']
             
-            #result_file = f'parameter_estimations/model_evaluations.txt'
-            result_file = f'parameter_estimations/model_evaluations_fo_nodelay.txt'
-            #result_file = f'parameter_estimations/model_evaluations_reply_retweets.txt'
+            result_file = f'parameter_estimations/model_evaluations{result_file_mod}.txt'
             hist_folder = 'sampled_conversations_graphs/engagement_histograms'
             
-            metrics1 = f'{conv_id},{root_followers},{n_rep_users},{type_},{first_peak},{second_peak},'
+            metrics1 = f'{conv_id},{root_followers},{type_},{first_peak},{second_peak},'
             metrics2 = f'{n_replies},{reply_ratio},{tot_eng},{n_api_retweets},{n_api_replies},'
-            #estimates = f'{lambda_},{beta_},{a},{b},{g},{rho},{fo_MSE},{fo_RSS_frac},{so_MSE},{so_RSS_frac},{sum_signal_squared}'
+            estimates = f'{lambda_},{beta_},{a},{b},{g},{rho},{fo_MSE},{fo_RSS_frac},{so_MSE},{so_RSS_frac},{sum_signal_squared}'
             #estimates2 = f'{a},{b},{g},{rho},{so_MSE},{so_RSS_frac},{a2},{b2},{g2},{rho2},{so_MSE2},{so_RSS_frac2},{sum_signal_squared}'
-            estimates3 = f'{lambda_},{beta_},{fo_MSE},{fo_RSS_frac},{sum_signal_squared}'
-            write_text(file_name=result_file, text=metrics1+metrics2+estimates3)
+            #estimates3 = f'{lambda_},{beta_},{fo_MSE},{fo_RSS_frac},{sum_signal_squared}'
+            write_text(file_name=result_file, text=metrics1+metrics2+estimates)
             
-            # path=f'{hist_folder}/{conv_id}_first-and-second_order.png'
-            # path=f'{hist_folder}/{conv_id}_second_order_reply_retweets.png'
-            if plot_engagement:
-                _, _ = create_hist([engagement_time[:n_replies], engagement_time[n_replies:]], bins,
-                                path=f'{hist_folder}/{conv_id}_first_order_no_delay.png',
-                                title='Tweet Engagement', xlab='time (h)', ylab='counts',
-                                log_=False, t=t, y=fo_model_eng)#, y2=so_model_eng)
+            if plot_engagement and (sufficient % 100) == 0:
+                print(f'Processed {sufficient} conversations')
+                _, _ = create_hist([reply_times, retweet_times, quote_times], bins,
+                                path=f'{hist_folder}/{conv_id}{result_file_mod}.png',
+                                title='', xlab='time (h)', ylab='counts',
+                                log_=False, t=t, y=fo_model_eng, y2=so_model_eng)
             
         except Exception as e:
             logging.warning(e)
@@ -838,12 +561,14 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagem
     
     return
 
+
 def get_interaction_paths(conv_id: str) -> tuple[str, str, str]:
     """Returns the paths to precomputed interaction times"""
     reply_times_path   = f'interaction_times/reply_times/{conv_id}.txt'
     retweet_times_path = f'interaction_times/retweet_times/{conv_id}.txt'
     quote_times_path   = f'interaction_times/quote_times/{conv_id}.txt'
     return reply_times_path, retweet_times_path, quote_times_path
+
 
 def get_follower_paths(conv_id: str) -> tuple[str, str, str]:
     """Returns the paths to the number of followers for the interactions"""
@@ -853,76 +578,82 @@ def get_follower_paths(conv_id: str) -> tuple[str, str, str]:
     return reply_followers_path, retweet_followers_path, quote_followers_path
 
 
-def load_precomputed_enagegement(reply_times_path: str, retweet_times_path: str, quote_times_path: str,
-                                 reply_followers_path: str, retweet_followers_path: str, quote_followers_path: str) -> None:
+def load_precomputed_engagement_times(conv_id: str):
+    """Loads the engagement data of a conversation from
+    the folder interaction_times.
+    
+    Args:
+        - conv_id: conversation ID
 
+    Returns:
+        - lists of engagement times for the
+        respective interaction category
+    """
+    reply_times_path, retweet_times_path, quote_times_path = get_interaction_paths(conv_id)
     reply_times = read_file(reply_times_path)
     retweet_times = read_file(retweet_times_path)
-    quote_times = read_file(quote_times_path)
 
+    if os.path.isfile(quote_times_path):
+        quote_times = read_file(quote_times_path)
+    else:
+        quote_times = []
+
+    return reply_times, retweet_times, quote_times
+
+
+def load_precomputed_engagement_followers(conv_id: str):
+    """Loads the engagement data of a conversation from
+    the folder interaction_followers.
+    
+    Args:
+        - conv_id: conversation ID
+
+    Returns:
+        - lists of engagement follower counts for the
+        respective interaction category
+    """
+    reply_followers_path, retweet_followers_path, quote_followers_path = get_follower_paths(conv_id)
     reply_followers = read_file(reply_followers_path)
     retweet_followers = read_file(retweet_followers_path)
-    quote_followers = read_file(quote_followers_path)
-
-    return reply_times, retweet_times, quote_times, reply_followers, retweet_followers, quote_followers
-
-
-def plot_interaction_followers(conv_ids: list[str], delta_sec=3600) -> None:
-    sufficient, missing_data, too_few = 0, 0, 0
     
-    # Iterate with generator from filter(all_files_exist, conv_ids)?
-    for conv_id in conv_ids:
-        rep_times_path, rt_times_path, q_times_path = get_interaction_paths(conv_id)
-        rep_flw_path, rt_flw_path, q_flw_path = get_follower_paths(conv_id)
-        
-        # Check that files exist. We assume that if one exists, so does all.
-        if not os.path.isfile(rep_times_path) or not os.path.isfile(q_times_path) or not os.path.isfile(rep_flw_path):
-            missing_data += 1
-            continue
-        elif not os.path.isfile(f'root_tweets/{conv_id}_root.jsonl'):
-            missing_data += 1
-            continue
-        
-        root = read_file(f'root_tweets/{conv_id}_root.jsonl')[0]
-        root_followers = root['author']['public_metrics']['followers_count']
+    if os.path.isfile(quote_followers_path):
+        quote_followers = read_file(quote_followers_path)
+    else:
+        quote_followers = []
+    
+    return reply_followers, retweet_followers, quote_followers
 
-        reply_times, retweet_times, quote_times, reply_followers, retweet_followers, quote_followers = load_precomputed_enagegement(rep_times_path, rt_times_path,
-                                                                                                                                    q_times_path, rep_flw_path,
-                                                                                                                                    rt_flw_path, q_flw_path)
-        #quote_times, quote_followers = [], []
-        #for q in file_generator(f'quotes/{conv_id}_quotes.jsonl'):
-        #    quote_times.append(compute_relative_time(root['created_at'], q['created_at']))
-        #    quote_followers.append(q['author']['public_metrics']['followers_count'])
-        
-        n_replies, n_retweets, n_quotes = len(reply_times), len(retweet_times), len(quote_times)
-        tot_eng = n_replies + n_retweets + n_quotes
-        assert tot_eng == len(reply_followers) + len(retweet_followers) + len(quote_followers)
 
-        n_api_retweets = root['public_metrics']['retweet_count']
-        # DECISION: Ignore the conversations that have fewer than 50 replies/retweets
-        # or if we are missing more than 50% of the retweets
-        if (tot_eng < 50) or (n_retweets <= 0.5*n_api_retweets):
-            too_few += 1
-            continue
-        else:
-            sufficient += 1
-        
-        # reply_ratio = n_replies / tot_eng
+def load_conv_followers(follower_dist_path: str) -> list[int]:
+    """Loads the followers of the unique users in the conversation.
+    
+    Args:
+        - follower_dist_path: path to file that contains
+        the unique follower counts
+    
+    Returns:
+        - unique_flws: list of follower count
+    """
+    unique_flws = []
+    for flw in file_generator(follower_dist_path):
+        unique_flws.append(flw)
+    return unique_flws
 
-        ## Peak detection to find the intervals in which to check for users with many followers.
 
-        ## Check for 
-        
-        # Bin and estimate engagement curve (time series with increments of delta_t) 
-        max_rep, max_rt, max_q = max(reply_times, default=0), max(retweet_times, default=0), max(quote_times, default=0)
-        maximum_time = max(max_rep, max(max_rt, max_q))
-        bins, delta_h = create_bins(delta_sec, maximum_time, padding=True)
-        hist_folder = 'sampled_conversations_graphs/engagement_histograms/interactor_followers'
-        _, _ = create_hist_scatter([reply_times, retweet_times, quote_times], bins,
-                                    path=f'{hist_folder}/{conv_id}_followers.png',
-                                    title='Tweet Engagement', xlab='time (h)', ylab='counts',
-                                    scatter_y=[reply_followers, retweet_followers, quote_followers], root_flw=root_followers)
-    print('sufficient: {}, missing data: {}, too few data point: {}'.format(sufficient, missing_data, too_few))
+def compute_interactions(infl_times: np.array, interaction_times_list: tuple[np.array], window: float):
+    ### TODO: If the window size is w, and influencer time is k<w, then use window size k instead
+    interactions_before, interactions_after = np.zeros(len(infl_times)), np.zeros(len(infl_times))
+    for interaction_times in interaction_times_list:
+        for t in interaction_times:
+            v  = infl_times-t
+            a = np.where((v < 0) & (v > -window))
+            b = np.where((v > 0) & (v <  window))
+            z_a, z_b = np.zeros(len(v), dtype=int), np.zeros(len(v), dtype=int)
+            z_a[a] = 1
+            z_b[b] = 1
+            interactions_after += z_a
+            interactions_before += z_b
+    return interactions_after, interactions_before
 
 
 def undirected_message_tree(conv_id: str) -> nx.Graph:
