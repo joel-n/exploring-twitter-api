@@ -221,6 +221,9 @@ class miner():
             if os.path.isfile(f'sampled_conversations/{conv_id}_conversation-tweets.jsonl') or os.path.isfile(f'interaction_times/reply_times/{conv_id}.txt'):
                 self.logger.info(f'Conversation {conv_id} already retrieved.')
                 continue
+            elif os.path.isfile(f'root_tweets/{conv_id}_root.jsonl'):
+                self.logger.info(f'Conversation {conv_id} already retrieved (root exists).')
+                continue
                 
             # Fetch root; if retrieval fails, skip the conversation.
             root_exists = self.get_single_root(conv_id)
@@ -309,114 +312,105 @@ class miner():
 
 
     def get_all_retweets(self, conv_ids: list[str]) -> None:
-            """Get retweets of conversation roots and stores them in a .jsonl-file.
-            Will ignore the conversation IDs that already is associated with a 
-            retweet file. Efficient query for all RTs containing the text, and is
-            an RT of the root author. In practice, not all retweets can be fetched
-            due to some profiles being protected.
-                
-            Args:
-                - conv_ids: list of conversation IDs to fetch retweets for
-                
-            No return value.    
-            """
-
-            roots, retrieved_conv_ids = self.get_root_tweets(conv_ids, get_saved=True)
+        """Get retweets of conversation roots and stores them in a .jsonl-file.
+        Will ignore the conversation IDs that already is associated with a 
+        retweet file. Efficient query for all RTs containing the text, and is
+        an RT of the root author. In practice, not all retweets can be fetched
+        due to some profiles being protected.
             
-            n_roots = len(roots)
-            n_retweets = 0
-            roots_skipped, no_text_roots = 0, 0
-            for r in roots:
-                n_retweets += r['n_retweets']
+        Args:
+            - conv_ids: list of conversation IDs to fetch retweets for
             
+        No return value.    
+        """
+
+        roots, retrieved_conv_ids = self.get_root_tweets(conv_ids, get_saved=True)
+        
+        n_roots = len(roots)
+        n_retweets = 0
+        roots_skipped, no_text_roots = 0, 0
+        for r in roots:
+            n_retweets += r['n_retweets']
+        
+        
+        print('{} of {} root tweets were available'.format(n_roots, len(conv_ids)))
+        print('Total of {} retweets from {} roots.\
+        With 300 queries per hour this should take {:.3f} minutes ({:.3f} hours)'.format(n_retweets, n_roots, n_roots/5, n_roots/300))
+        t1 = pytime.time()
+        
+        for i, root in enumerate(roots):
+            if os.path.isfile(f'retweets/{retrieved_conv_ids[i]}.jsonl') or os.path.isfile(f'interaction_times/retweet_times/{retrieved_conv_ids[i]}.txt'):
+                roots_skipped += 1
+                self.logger.info(f'Skipped retweets of conversation {retrieved_conv_ids[i]} as they were already retrieved.')
+                continue
             
-            print('{} of {} root tweets were available'.format(n_roots, len(conv_ids)))
-            print('Total of {} retweets from {} roots.\
-            With 300 queries per hour this should take {:.3f} minutes ({:.3f} hours)'.format(n_retweets, n_roots, n_roots/5, n_roots/300))
-            t1 = pytime.time()
+            # DECISION: Heuristic to get rid of links in tweets
+            root_text = root['text'].split('https://t.co/')[0]
+            # DECISION: We could also take root_text = ''.join(root['text'].split('https://t.co/')[:-1])
+            # to remove the last link (alt. use rfind())
             
-            for i, root in enumerate(roots):
-                if os.path.isfile(f'retweets/{retrieved_conv_ids[i]}.jsonl') or os.path.isfile(f'interaction_times/retweet_times/{retrieved_conv_ids[i]}.txt'):
-                    roots_skipped += 1
-                    self.logger.info(f'Skipped retweets of conversation {retrieved_conv_ids[i]} as they were already retrieved.')
-                    continue
-                
-                # DECISION: Heuristic to get rid of links in tweets
-                root_text = root['text'].split('https://t.co/')[0]
-                # DECISION: We could also take root_text = ''.join(root['text'].split('https://t.co/')[:-1])
-                # to remove the last link (alt. use rfind())
-                
-                # Handle quotation marks
-                #if root_text.find('"') != -1 or root_text.find('&amp;') =! -1 or root_text.find('&gt;') =! -1 or root_text.find('&lt;'):
-                if '"' in root_text or '&amp;' in root_text or '&gt;' in root_text or '&lt;' in root_text:
-                    root_text = handle_special(root_text)
-                    print(f'Handled quotation marks in conversation {retrieved_conv_ids[i]}; text:', root_text)
-                elif not root_text:
-                    write_text('skipped_retweets.txt', 'skipping conversation {} (text: {})'.format(retrieved_conv_ids[i], root['text']))
-                    no_text_roots += 1
-                    continue
-                
-                root_author = root['id']
-                print(retrieved_conv_ids[i], ',', root['n_retweets'], 'retweets')
-                print(root_text)
-                       
-                # TODO: Modify the expansion fields as well? See twitter or Postman WS for allowed values
-                # TODO: Use try catch to avoid breaking HTTPerrors?
-                max_results_pp = 500
-                #results = self.full_archive_search(query_=f'retweets_of:{root_author} "{root_text}"', max_results_pp=max_results_pp,
-                #                            expansions_='author_id,in_reply_to_user_id,referenced_tweets.id,referenced_tweets.id.author_id',
-                #                            tweet_fields_='id,author_id,referenced_tweets,created_at', user_fields_='id,public_metrics',
-                #                            media_fields_='type', poll_fields_='id', place_fields_='id')
-
-                # TODO: query also on time if we search for tweets that yield too many results
-                search_results = self.client.search_all(query=f'retweets_of:{root_author} "{root_text}"', max_results=max_results_pp,
-                                                        expansions='author_id,in_reply_to_user_id,referenced_tweets.id,referenced_tweets.id.author_id',
-                                                        tweet_fields='id,author_id,referenced_tweets,created_at', user_fields='id,public_metrics',
-                                                        media_fields='type', poll_fields='id', place_fields='id')
-                
-                num_rts = root['n_retweets']
-                elbow_space = 2 if num_rts > 10000 else 4
-                n_expected_pages = int(elbow_space * (2 + num_rts/max_results_pp)) # allow double the expected pages
-
-                #for retweet in results:
-                #    for t in retweet['referenced_tweets']:
-                #        if t['id'] == retrieved_conv_ids[i]:
-                #            # Append to file here? How many results do we expect?
-                #            retweets.append(retweet)
-                #            break
-
-                n_pages, tot_results = 0, 0
-                api_mismatch = False
-                for page in search_results:
-                    retweets = []
-                    result = expansions.flatten(page)
-                    for retweet in result:
-                        for t in retweet['referenced_tweets']:
-                            if t['id'] == retrieved_conv_ids[i]:
-                                retweets.append(retweet)
-                    tot_results += len(retweets)
-                    append_objs_to_file(f'retweets/{retrieved_conv_ids[i]}.jsonl', retweets)
-                    n_pages += 1
-                    if n_pages > n_expected_pages:
-                        api_mismatch = True
-                        break
-
-                # TODO: warn if there are many retweets according to root, but none were retrieved in the query
-                # Add the expected number of RTs (root['n_retweets']) to the log file
-                if api_mismatch:
-                    self.logger.info(f'Retweets to conversation {retrieved_conv_ids[i]} resulted in too many matches and was aborted after {n_pages} pages of results.')
-                    self.logger.info(f'Expected {int(1 + num_rts/max_results_pp)} pages for {num_rts} retweets. Retrieved {tot_results} retweets before aborting.')
-                    continue
-
-                # already appended in loop: append_objs_to_file(f'retweets/{retrieved_conv_ids[i]}.jsonl', retweets)
-                self.logger.info(f'Retrieved {tot_results} (of {num_rts}) retweets to conversation {retrieved_conv_ids[i]}.')
-                
-            t2 = pytime.time() - t1
-            self.logger.info(f'Retweets retrieval took {t2} seconds.')
-            print('Retweets retrieval took {:.3f} minutes ({:.3f} hours); '.format(t2/60, t2/3600))
-            print('Skipped {} roots for which RTs are already retrieved, and {} roots which contained no searchable text.'.format(roots_skipped, no_text_roots))
+            # Handle quotation marks
+            #if root_text.find('"') != -1 or root_text.find('&amp;') =! -1 or root_text.find('&gt;') =! -1 or root_text.find('&lt;'):
+            if '"' in root_text or '&amp;' in root_text or '&gt;' in root_text or '&lt;' in root_text:
+                root_text = handle_special(root_text)
+                print(f'Handled quotation marks in conversation {retrieved_conv_ids[i]}; text:', root_text)
+            elif not root_text:
+                write_text('skipped_retweets.txt', 'skipping conversation {} (text: {})'.format(retrieved_conv_ids[i], root['text']))
+                no_text_roots += 1
+                continue
             
-            return
+            root_author = root['id']
+            print(retrieved_conv_ids[i], ',', root['n_retweets'], 'retweets')
+            print(root_text)
+                    
+            # TODO: Modify the expansion fields as well? See twitter or Postman WS for allowed values
+            # TODO: Use try catch to avoid breaking HTTPerrors?
+            max_results_pp = 500
+            # TODO: query also on time if we search for tweets that yield too many results
+            search_results = self.client.search_all(query=f'retweets_of:{root_author} "{root_text}"', max_results=max_results_pp,
+                                                    expansions='author_id,in_reply_to_user_id,referenced_tweets.id,referenced_tweets.id.author_id',
+                                                    tweet_fields='id,author_id,referenced_tweets,created_at,source', user_fields='id,public_metrics',
+                                                    media_fields='type', poll_fields='id', place_fields='id')
+            
+            num_rts = root['n_retweets']
+            elbow_space = 2 if num_rts > 10000 else 4
+            n_expected_pages = int(elbow_space * (2 + num_rts/max_results_pp)) # allow double the expected pages
+
+            n_pages, tot_results = 0, 0
+            api_mismatch = False
+            for page in search_results:
+                retweets = []
+                result = expansions.flatten(page)
+                for retweet in result:
+                    for t in retweet['referenced_tweets']:
+                        if t['id'] == retrieved_conv_ids[i]:
+                            retweets.append(retweet)
+                tot_results += len(retweets)
+                append_objs_to_file(f'retweets/{retrieved_conv_ids[i]}.jsonl', retweets)
+                n_pages += 1
+                if n_pages > n_expected_pages:
+                    api_mismatch = True
+                    break
+            
+            # Add empty file if there were no results (does not include the case of many hits but no relevant results)
+            if n_pages == 0:
+                append_objs_to_file(f'retweets/{retrieved_conv_ids[i]}.jsonl', [])
+
+            # Warn if there are many retweets according to root, but none could be retrieved
+            if api_mismatch:
+                self.logger.info(f'Retweets to conversation {retrieved_conv_ids[i]} resulted in too many matches and was aborted after {n_pages} pages of results.')
+                self.logger.info(f'Expected {int(1 + num_rts/max_results_pp)} pages for {num_rts} retweets. Retrieved {tot_results} retweets before aborting.')
+                continue
+
+            # already appended in loop: append_objs_to_file(f'retweets/{retrieved_conv_ids[i]}.jsonl', retweets)
+            self.logger.info(f'Retrieved {tot_results} (of {num_rts}) retweets to conversation {retrieved_conv_ids[i]}.')
+            
+        t2 = pytime.time() - t1
+        self.logger.info(f'Retweets retrieval took {t2} seconds.')
+        print('Retweets retrieval took {:.3f} minutes ({:.3f} hours); '.format(t2/60, t2/3600))
+        print('Skipped {} roots for which RTs are already retrieved, and {} roots which contained no searchable text.'.format(roots_skipped, no_text_roots))
+        
+        return
 
 
     def get_quotes(self, conv_ids: list[str]) -> None:
@@ -501,8 +495,34 @@ class miner():
         return userlist
 
 
+    def retrieve_followers(self, user_id: str):
+        """Saves the user ID of the followers of user_id to file.
+
+        Args:
+            - user_id: ID of account for which to retrieve followers.
+        
+        No return value.
+        """
+        file_name = f'infl_follower_ids/{user_id}_followers.txt'
+        if os.path.isfile(file_name):
+            self.logger.info(f'Followers for {user_id} already retrieved.')
+            return
+
+        followers = self.client.followers(user=user_id)
+        
+        for page in followers:
+            if not 'data' in page:
+                append_ids_to_file(file_name, [])
+                break
+            result = expansions.flatten(page)
+            append_ids_to_file(file_name, result)
+
+        return
+
+
     def get_followers(self, user_, load=True):
-        """Saves and (optionally) returns a list of user profiles and IDs
+        """OUTDATED FUNCTION, USE retrieve_followers() INSTEAD.
+        Saves and (optionally) returns a list of user profiles and IDs
         of the accounts following a user. The profiles are stored in the
         follower_ids folder.
         
