@@ -14,9 +14,9 @@ def append_ids_to_file(file_name: str, result: list) -> None:
     """
     with open(file_name, 'a+') as filehandle:
         for element in result:
-                filehandle.write('%s\n' % element['id'])    
-                
-                
+            filehandle.write('%s\n' % element['id'])
+
+
 def append_objs_to_file(file_name: str, result: list) -> None:
     """Append a file with the objects in result.
     Use case: append a file with a flattened search
@@ -32,8 +32,8 @@ def append_objs_to_file(file_name: str, result: list) -> None:
     with open(file_name, 'a+') as filehandle:
         for obj in result:
             filehandle.write('%s\n' % json.dumps(obj))
-                
-                
+
+
 def read_file(file_name: str) -> list[dict]:
     """Returns a list of the contents in a .jsonl-file.
     
@@ -49,7 +49,7 @@ def read_file(file_name: str) -> list[dict]:
             objs.append(json.loads(obj))
     return objs
 
-    
+
 def file_generator(file_name: str):
     """Returns a generator to the contents in a file.
     
@@ -62,8 +62,8 @@ def file_generator(file_name: str):
     with open(file_name, 'r') as filehandle:
         for obj in filehandle:
             yield json.loads(obj)
-    
-    
+
+
 def write_text(file_name: str, text: str) -> None:
     """Writes a string to a file.
     
