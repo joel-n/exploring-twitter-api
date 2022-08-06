@@ -1,13 +1,10 @@
 import os
 import logging
 import datetime
-#import numpy as np
 import networkx as nx
-#import matplotlib.pyplot as plt
-from file_manip import *
 from plot_tools import *
-from curve_fitting import *
-from scipy.stats import wilcoxon, spearmanr
+from file_manip import read_file, file_generator, write_text
+from curve_fitting import eval_error, estimate_biexponential, estimate_decay_parameters, exponential, biexponential
 
 
 def get_saved_conversation_ids(lower_bound: int, upper_bound: int, folder='sampled_conversations', delimiter='_') -> list:
@@ -289,7 +286,7 @@ def plot_peak_detection(y, result, conv_id, plot=True):
     return type_, first_peak, second_peak, peaks_x, peaks_y
 
 
-def get_file_paths(conv_id: str) -> tuple[str, str, str]:
+def get_file_paths(conv_id: str) -> tuple[str, str, str, str]:
     """Returns the file paths to the conversation root, replies, and retweets
     for a given conversation ID.
     
@@ -303,11 +300,12 @@ def get_file_paths(conv_id: str) -> tuple[str, str, str]:
     root_path = f'root_tweets/{conv_id}_root.jsonl'
     conv_path = f'sampled_conversations/{conv_id}_conversation-tweets.jsonl'
     retw_path = f'retweets/{conv_id}.jsonl'
+    quote_path = f'quotes/{conv_id}_quotes.jsonl'
     
-    return root_path, conv_path, retw_path
+    return root_path, conv_path, retw_path, quote_path
 
 
-def has_public_metrics(retweet_path: str):
+def has_public_metrics(retweet_path: str) -> bool:
     contains_metrics = False
     for rt in file_generator(retweet_path):
         if 'public_metrics' in rt['author']:
@@ -316,7 +314,7 @@ def has_public_metrics(retweet_path: str):
     return contains_metrics
 
 
-def create_bins(delta_sec, max_time, padding=True):
+def create_bins(delta_sec, max_time, padding=True) -> tuple[np.array, float]:
     """Creates bins spaced by delta_sec seconds for histogram generation.
     Zero bins can be added to conversations that have a maximum engagement
     time under 72 hours.
