@@ -32,7 +32,7 @@ def main():
     thread_stop.clear()
 
     t_query = datetime.datetime.utcnow().strftime('%Y-%m-%d_%H-%M-%S')
-    file_name = f'sampled_tweets_{t_query}.jsonl'
+    file_name = f'stream_samples/sampled_tweets_{t_query}.jsonl'
 
     def sample():
         # Samples from the Twitter API stream. Used in a Thread.
