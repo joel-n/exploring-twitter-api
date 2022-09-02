@@ -1,3 +1,4 @@
+import re
 import os
 import logging
 import datetime
@@ -29,6 +30,40 @@ def get_saved_conversation_ids(lower_bound: int, upper_bound: int, folder='sampl
             conv_ids.append(conv_id)
 
     return conv_ids
+
+
+def influencers_to_retrieve(conv_ids, max_flw_threshold, thr_pct='095'):
+    """Returns the set of influencers that appear
+    in the given conversations. Files with number
+    of influencer followers must exist.
+    
+    Args:
+        - conv_ids: list of conversation IDs
+        - max_flw_threshold: Conversations with an
+        influencer with higher follower count than this
+        number will be ignored.
+        - thr_pct: ending in file name (local infl. threshold)
+    
+    Returns:
+        - infl_ids: set of influencer IDs
+    """
+    infl_ids = set()
+    for conv_id in conv_ids:    
+        skip_conv = False
+        
+        for nflw in file_generator(f'infl_nflws/{conv_id}_nflws_{thr_pct}.txt'):
+            if nflw > max_flw_threshold:
+                skip_conv = True
+                break
+
+        if skip_conv:
+            continue
+
+        for infl_id in file_generator(f'infl_ids/{conv_id}_{thr_pct}.txt'):
+            if not os.path.isfile(f'infl_follower_ids/{infl_id}_followers.txt'):
+                infl_ids.add(infl_id)
+    return infl_ids
+
 
 
 def compute_relative_time(t0: str, t: str) -> float:
@@ -652,6 +687,48 @@ def compute_interactions(infl_times: np.array, interaction_times_list: tuple[np.
             interactions_after += z_a
             interactions_before += z_b
     return interactions_after, interactions_before
+
+
+def not_space(s: str) -> bool:
+    """Returns false if s is empty or
+    consists of whitespace characters.
+    
+    Args:
+        - s: string to check
+    
+    Returns:
+        - boolean indicating if string
+        fulfills the criterion
+    """
+    return not (s.isspace() or not s)
+
+
+def handle_special(s: str) -> str:
+    """Removes quotation marks and special
+    characters (such as ampersands etc.) from
+    the string where they would cause an error
+    if passed to the API. Used when fetching
+    retweets and querying on the tweet text.
+    Seems to work for right-to-left languages
+    as well, e.g., Arabic and Hebrew.
+    
+    Args:
+        - s: string that contains quotation
+        marks (" or '), and a hyperlink removed.
+        
+    Returns:
+        - a string with quotation marks in the
+        correct places: only between characters
+        in the string, and no quotation marks at
+        the end or beginning of the string.
+    """
+    #s_list = s.split('"')
+    s_list = re.split('\'|"|&amp;|&gt;|&lt;', s)
+    # TODO/Decision: Heuristic: If there is a string that has more than 20 characters in it
+    # it alone may be used as a query to minimize the risk of other special characters
+    # messing up the query
+    return '" "'.join(filter(not_space, s_list))
+
 
 
 def undirected_message_tree(conv_id: str) -> nx.Graph:

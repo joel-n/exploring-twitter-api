@@ -5,7 +5,8 @@ from analysis_tools import get_file_paths
 
 def make_infl_id_file(conv_id: str, threshold: float, threshold_percentile: float) -> None:
     """Writes influencer IDs and follower count to file, given a threshold
-    computed in advance.
+    computed in advance. Does not create a file in case no influencers are
+    found.
 
     Args:
         - conv_id: Conversation ID
@@ -29,6 +30,8 @@ def make_infl_id_file(conv_id: str, threshold: float, threshold_percentile: floa
                 infl_attr.add((int(tweet['author']['id']), tweet['author']['public_metrics']['followers_count']))
                 #infl_attr[tweet['author']['id']] = tweet['author']['public_metrics']['followers_count']
     
+    if len(infl_attr) == 0:
+        return
     
     append_objs_to_file(infl_id_path, [attr[0] for attr in infl_attr])
     append_objs_to_file(infl_nflw_path, [attr[1] for attr in infl_attr])
