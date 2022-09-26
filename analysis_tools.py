@@ -312,7 +312,7 @@ def plot_peak_detection(y, result, conv_id, plot=True):
             if i > 0:
                 plt.legend(loc='upper right', fontsize=26)
             plt.tight_layout()
-            plt.savefig(f'sampled_conversations_graphs/peak_detection/peaks{i}.svg')
+            plt.savefig(f'sampled_conversations_graphs/peak_detection/peaks{conv_id}.png')
             plt.close('all')
             #plt.show()
     
@@ -372,7 +372,7 @@ def create_bins(delta_sec, max_time, padding=True) -> tuple[np.array, float]:
     return bins, delta_h
 
 
-def perform_peak_detection(engagement_hist_values, plot=False):
+def perform_peak_detection(engagement_hist_values, conv_id='', plot=False):
     """Performs peak detection and returns the type of the
     conversation, and the locations of the first and second
     peaks.
@@ -393,7 +393,7 @@ def perform_peak_detection(engagement_hist_values, plot=False):
     rd = np.zeros(lag_)
     time_series = np.concatenate((rd,engagement_hist_values))
     result = peak_detection(time_series, lag=lag_, threshold=1.5, influence=0.8)
-    type_, first_peak, second_peak, peaks_x, peaks_y = plot_peak_detection(time_series, result, conv_id='', plot=plot)
+    type_, first_peak, second_peak, peaks_x, peaks_y = plot_peak_detection(time_series, result, conv_id=conv_id, plot=plot)
 
     return type_, first_peak, second_peak, peaks_x, peaks_y
 
