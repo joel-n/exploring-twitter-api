@@ -614,6 +614,8 @@ class miner():
         for _, tweet_dict in enumerate(sample):
             
             conv_id = tweet_dict['data']['conversation_id']
+            if os.path.isfile(f'root_tweets/{conv_id}_root.jsonl'):
+                continue
             
             # If the sampled tweet is a RT, use the retweeted tweet as root
             if 'referenced_tweets' in tweet_dict['data']:
@@ -624,11 +626,9 @@ class miner():
             else:
                 self.logger.info(f'Tweet {conv_id} has no referenced tweets.')
 
-            if os.path.isfile(f'root_tweets/{conv_id}_root.jsonl'):
-                continue
-
             self.get_single_tweet_reply_retweet_quote(conv_id)
             self.logger.info(f'Finished retrieving interactions for conversation {conv_id}.')
+            tot_conv_retrieved += 1
         
         t2 = pytime.time() - t1
         self.logger.info(f'Conversation retrieval took {t2} seconds. Out of {len(sample)} conversations, {tot_conv_retrieved} contained replies.')
@@ -658,7 +658,7 @@ class miner():
         return userlist
 
 
-    def retrieve_followers(self, user_ids: str):
+    def retrieve_followers(self, user_ids: list[str], folder_name='infl_follower_ids'):
         """Saves the user ID of the followers of user_id to file.
 
         Args:
@@ -668,7 +668,7 @@ class miner():
         No return value.
         """
         for user_id in user_ids:
-            file_name = f'infl_follower_ids/{user_id}_followers.txt'
+            file_name = f'{folder_name}/{user_id}_followers.txt'
             if os.path.isfile(file_name):
                 self.logger.info(f'Followers for {user_id} already retrieved.')
                 return
