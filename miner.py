@@ -671,13 +671,14 @@ class miner():
             file_name = f'{folder_name}/{user_id}_followers.txt'
             if os.path.isfile(file_name):
                 self.logger.info(f'Followers for {user_id} already retrieved.')
-                return
+                continue
 
             followers = self.client.followers(user=user_id)
             
             for page in followers:
                 if not 'data' in page:
                     append_ids_to_file(file_name, [])
+                    self.logger.info(f'Error when retrieving followers of {user_id}.\n{page}')
                     break
                 result = expansions.flatten(page)
                 append_ids_to_file(file_name, result)
