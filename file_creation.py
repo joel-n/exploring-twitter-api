@@ -61,7 +61,7 @@ def make_unique_flw_file(conv_ids: list[str], read_from_external_disk = False):
     return
 
 
-def make_infl_id_file_ne(conv_ids: list[str], threshold_percentile: float) -> None:
+def make_infl_id_file(conv_ids: list[str], threshold_percentile: float) -> None:
     """Writes influencer IDs and follower count to file. Does
     not create a file in case no influencers are found, or in
     the case that such a file already exists, or data is either

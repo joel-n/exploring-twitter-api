@@ -13,7 +13,7 @@ def create_plot(x, y, path: str, format_='-', title='', xlab='', ylab='') -> Non
         - xlab: x-axis label
         - ylab: y-axis label
         
-    No return value.    
+    No return value.
     """
     plt.figure(figsize=(8,8), clear=True)
     if y is None:
@@ -29,7 +29,7 @@ def create_plot(x, y, path: str, format_='-', title='', xlab='', ylab='') -> Non
 
 
 def create_hist(x, bins, path: str, title='', xlab='', ylab='',
-                log_=False, t=None, y=None, y2=None, stacked=True) -> None:
+                log_=False, t=None, y=None, y2=None, stacked=True):
     """Plot tweet data x in a histogram and save
     to the provided path. Optionally plots a line
     (or two) over the histogram. Returns the histogram
@@ -75,7 +75,7 @@ def create_hist(x, bins, path: str, title='', xlab='', ylab='',
 
 def create_hist_scatter(x, bins, path: str, title='', xlab='', ylab='', log_=False, t=None,
                         y=None, scatter_y=None, root_flw=None, peaks_x=None, peaks_y=None,
-                        max_flw=None, max_t=None, threshold=None) -> None:
+                        max_flw=None, max_t=None, threshold=None):
     """Plot tweet data x (replies, retweets and quotes) in
     a histogram and save to the provided path. Optionally
     plots a line over the histogram, and the followers of
@@ -89,8 +89,16 @@ def create_hist_scatter(x, bins, path: str, title='', xlab='', ylab='', log_=Fal
         - title: figure title
         - xlab: x-axis label
         - ylab: y-axis label
-        - t: x-values of overlaid line
-        - y: y-values of overlaid line
+        - log_: log valued histogram if set to True
+        - t: x-values of superimposed line
+        - y: y-values of superimposed line
+        - scatter_y: y-coordinate for scatter plot values
+        - root_flw: y-value for root author follower marker
+        - peaks_x: x-coordinates for detected peaks
+        - peaks_y: y-coordinates for detected peaks
+        - max_flw: y-coordinates above threshold
+        - max_t: x-coordinates (time) for max_flw values
+        - threshold: value of superimposed horizontal line y=threshold
         
     Returns:
         - n: values of the histogram bins

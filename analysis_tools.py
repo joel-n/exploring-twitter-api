@@ -1,5 +1,6 @@
 import re
-import os
+from os import listdir
+from os.path import isfile
 import logging
 import datetime
 import networkx as nx
@@ -21,7 +22,7 @@ def get_saved_conversation_ids(lower_bound: int, upper_bound: int, folder='sampl
         - conv_ids: a list of conversation IDs from the folder
     """
     
-    file_paths = os.listdir(folder)
+    file_paths = listdir(folder)
     conv_ids = []
     
     for conv_file_name in file_paths:
@@ -60,7 +61,7 @@ def influencers_to_retrieve(conv_ids, max_flw_threshold, thr_pct='095'):
             continue
 
         for infl_id in file_generator(f'infl_ids/{conv_id}_{thr_pct}.txt'):
-            if not os.path.isfile(f'infl_follower_ids/{infl_id}_followers.txt'):
+            if not isfile(f'infl_follower_ids/{infl_id}_followers.txt'):
                 infl_ids.add(infl_id)
     return infl_ids
 
@@ -486,7 +487,8 @@ def fit_first_order(time, engagement_hist, delta_h, peak_detection=True):
     return lambda_, beta_, model_eng, type_, first_peak, second_peak
 
 
-def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagement=False, result_file_mod='') -> None:
+def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagement=False,
+                             detect_peaks=False, result_file_mod='') -> None:
     """Retrieves the engagement times of retweets and replies.
     Only considers conversations where root, conversation, and
     retweet files exist.
@@ -495,6 +497,10 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagem
         - conv_ids: iterator over conversation IDs
         - delta_sec: the time step length in seconds
         of the time series discretization in seconds
+        - plot_engagement: If True, plots every 100
+        processed conversation
+        - detect_peaks: If True, runs peak detection algorithm
+        - result_file_mod: string to append to result file name
         
     No return value.
     """
@@ -505,9 +511,9 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagem
     for conv_id in conv_ids:
         reply_times_path, retweet_times_path, quote_times_path = get_interaction_paths(conv_id)
         root_path = f'root_tweets/{conv_id}_root.jsonl'
-        
+
         # Check that root, conversation and retweet files exist.
-        if os.path.isfile(root_path) and os.path.isfile(reply_times_path) and os.path.isfile(quote_times_path):
+        if isfile(root_path) and isfile(reply_times_path) and isfile(quote_times_path):
             root = read_file(root_path)[0]
         else:
             missing_data += 1
@@ -542,7 +548,7 @@ def process_engagement_times(conv_ids: list[str], delta_sec: float, plot_engagem
 
         try:
             
-            lambda_, beta_, fo_model_eng, type_, first_peak, second_peak = fit_first_order(t, n, delta_h, peak_detection=False)
+            lambda_, beta_, fo_model_eng, type_, first_peak, second_peak = fit_first_order(t, n, delta_h, peak_detection=detect_peaks)
             #lambda_, beta_, type_, first_peak, second_peak = -1, -1, 'None', -1, -1 # if 1st order model is skipped
             #fo_MSE, fo_RSS_frac = -1, -1
 
@@ -626,7 +632,7 @@ def load_precomputed_engagement_times(conv_id: str):
     reply_times = read_file(reply_times_path)
     retweet_times = read_file(retweet_times_path)
 
-    if os.path.isfile(quote_times_path):
+    if isfile(quote_times_path):
         quote_times = read_file(quote_times_path)
     else:
         quote_times = []
@@ -649,7 +655,7 @@ def load_precomputed_engagement_followers(conv_id: str):
     reply_followers = read_file(reply_followers_path)
     retweet_followers = read_file(retweet_followers_path)
     
-    if os.path.isfile(quote_followers_path):
+    if isfile(quote_followers_path):
         quote_followers = read_file(quote_followers_path)
     else:
         quote_followers = []
@@ -749,7 +755,7 @@ def undirected_message_tree(conv_id: str) -> nx.Graph:
     
     G = nx.Graph()
     
-    if not os.path.isfile(root_path) or not os.path.isfile(conv_path):
+    if not isfile(root_path) or not isfile(conv_path):
         return G
     
     for re in file_generator(conv_path):
