@@ -247,9 +247,6 @@ class miner():
         if os.path.isfile(f'sampled_conversations/{conv_id}_conversation-tweets.jsonl') or os.path.isfile(f'interaction_times/reply_times/{conv_id}.txt'):
             self.logger.info(f'Conversation {conv_id} already retrieved.')
             return 0
-        elif os.path.isfile(f'root_tweets/{conv_id}_root.jsonl'):
-            self.logger.info(f'Conversation {conv_id} already retrieved (root exists).')
-            return 0
 
         # Fetch root; if retrieval fails, skip the conversation.
         root_exists = self.get_single_root(conv_id)
@@ -363,15 +360,15 @@ class miner():
                 continue
 
             max_results_pp = 500
-            n_pages, tot_results, num_rts, api_mismatch = self.__retweet_query(retrieved_conv_ids[i], max_results_pp)
+            #n_pages, tot_results, num_rts, api_mismatch = self.__retweet_query(retrieved_conv_ids[i], max_results_pp)
+            n_pages, tot_results, num_rts = self.__retweets_query(retrieved_conv_ids[i], max_results_pp)
 
             # Warn if there are many retweets according to root, but none could be retrieved
-            if api_mismatch:
-                self.logger.info(f'Retweets to conversation {retrieved_conv_ids[i]} resulted in too many matches and was aborted after {n_pages} pages of results.')
-                self.logger.info(f'Expected {int(1 + num_rts/max_results_pp)} pages for {num_rts} retweets. Retrieved {tot_results} retweets before aborting.')
-                continue
+            #if api_mismatch:
+            #    self.logger.info(f'Retweets to conversation {retrieved_conv_ids[i]} resulted in too many matches and was aborted after {n_pages} pages of results.')
+            #    self.logger.info(f'Expected {int(1 + num_rts/max_results_pp)} pages for {num_rts} retweets. Retrieved {tot_results} retweets before aborting.')
+            #    continue
 
-            # already appended in loop: append_objs_to_file(f'retweets/{retrieved_conv_ids[i]}.jsonl', retweets)
             self.logger.info(f'Retrieved {tot_results} (of {num_rts}) retweets to conversation {retrieved_conv_ids[i]}.')
             
         t2 = pytime.time() - t1
@@ -399,19 +396,51 @@ class miner():
             return 0
 
         max_results_pp = 500
-        n_pages, tot_results, num_rts, api_mismatch = self.__retweet_query(conv_id, max_results_pp)
-
-        # Warn if there are many retweets according to root, but none could be retrieved
-        if api_mismatch:
-            self.logger.info(f'Retweets to conversation {conv_id} resulted in too many matches and was aborted after {n_pages} pages of results.')
-            self.logger.info(f'Expected {int(1 + num_rts/max_results_pp)} pages for {num_rts} retweets. Retrieved {tot_results} retweets before aborting.')
-            return -1
-
-        # already appended in loop: append_objs_to_file(f'retweets/{retrieved_conv_ids[i]}.jsonl', retweets)
+        n_pages, tot_results, num_rts = self.__retweets_query(conv_id, max_results_pp)
         self.logger.info(f'Retrieved {tot_results} (of {num_rts}) retweets to conversation {conv_id}.')
         
         return tot_results
 
+
+    def __retweets_query(self, conv_id: str, max_results_pp: int):
+        """Makes a query for retweets of a conversation and stores the results.
+        
+        Args:
+            - conv_id: conversation ID
+            - max_results_pp: maximum results per page of query
+
+        Returns:
+            - n_pages: number of results pages retrieved
+            - tot_results: total number of retrieved retweets
+            - n_rts: retweets according to the API
+        """
+        root_dict = read_file(f'root_tweets/{conv_id}_root.jsonl')[0]
+
+        print(conv_id, ',', root_dict['public_metrics']['retweet_count'], 'retweets')
+        
+        search_results = self.client.search_all(query=f'retweets_of_tweet_id:{conv_id}', max_results=max_results_pp,
+                                                expansions='author_id,in_reply_to_user_id,referenced_tweets.id,referenced_tweets.id.author_id',
+                                                tweet_fields='id,author_id,referenced_tweets,created_at,source', user_fields='id,public_metrics',
+                                                media_fields='type', poll_fields='id', place_fields='id')
+        
+        num_rts = root_dict['public_metrics']['retweet_count']
+
+        n_pages, tot_results = 0, 0
+        for page in search_results:
+            retweets = []
+            result = expansions.flatten(page)
+            for retweet in result:
+                retweets.append(retweet)
+            tot_results += len(retweets)
+            append_objs_to_file(f'retweets/{conv_id}.jsonl', retweets)
+            n_pages += 1
+        
+        # Add empty file if there were no results (does not include the case of many hits but no relevant results)
+        if n_pages == 0:
+            append_objs_to_file(f'retweets/{conv_id}.jsonl', [])
+
+        return n_pages, tot_results, num_rts
+        
 
     def __retweet_query(self, conv_id: str, max_results_pp: int):
         """Makes a query for retweets of a conversation and stores the results.
@@ -600,7 +629,9 @@ class miner():
 
     def retrieve_interactions_from_sample(self, sample_file: str) -> None:
         """Retrieves all interactions of the conversations in the provided in
-        the sample stream file.
+        the sample stream file. Duplicate data will not be fetched as functions
+        called by get_single_tweet_reply_retweet_quote() will check for existing
+        reply, retweet, and quote files.
         
         Args:
             - sample_file: path to sample stream file
@@ -611,11 +642,8 @@ class miner():
         t1 = pytime.time()
         tot_conv_retrieved = 0
         
-        for _, tweet_dict in enumerate(sample):
-            
+        for tweet_dict in sample:
             conv_id = tweet_dict['data']['conversation_id']
-            if os.path.isfile(f'root_tweets/{conv_id}_root.jsonl'):
-                continue
             
             # If the sampled tweet is a RT, use the retweeted tweet as root
             if 'referenced_tweets' in tweet_dict['data']:
