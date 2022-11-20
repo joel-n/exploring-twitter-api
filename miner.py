@@ -254,21 +254,21 @@ class miner():
             self.logger.info(f'Root tweet {conv_id} could not be retrieved.')
             return -1
         
-        # TODO (re-do): fix so that partial results are printed to file
-        # in case of a very long conversation
+        conv_tweets = self.client.search_all(query=f'conversation_id:{conv_id}', max_results=100,
+                                             expansions='author_id,in_reply_to_user_id,referenced_tweets.id,referenced_tweets.id.author_id,entities.mentions.username',
+                                             tweet_fields='attachments,author_id,context_annotations,conversation_id,created_at,entities,id,public_metrics,text,referenced_tweets,reply_settings,source',
+                                             user_fields='created_at,entities,id,name,protected,public_metrics,url,username',
+                                             media_fields='type', poll_fields='id', place_fields='id')
         
-        # Calling full archive search (rate limit: 300 requests/15 minutes)
-        conv_query = f'conversation_id:{conv_id}'
-        conv_tweets = self.full_archive_search(query_=conv_query, max_results_pp=100,
-                                                expansions_='author_id,in_reply_to_user_id,referenced_tweets.id,referenced_tweets.id.author_id,entities.mentions.username',
-                                                tweet_fields_='attachments,author_id,context_annotations,conversation_id,created_at,entities,id,public_metrics,text,referenced_tweets,reply_settings,source',
-                                                user_fields_='created_at,entities,id,name,protected,public_metrics,url,username',
-                                                media_fields_='type', poll_fields_='id', place_fields_='id')
-
         filename = f'sampled_conversations/{conv_id}_conversation-tweets.jsonl'
-        n_results = len(conv_tweets)
-
-        append_objs_to_file(filename, conv_tweets)
+        n_results = 0
+        for page in conv_tweets:
+            replies = []
+            result = expansions.flatten(page)
+            for reply in result:
+                replies.append(reply)
+            n_results += len(replies)
+            append_objs_to_file(filename, replies)
 
         return n_results
 
